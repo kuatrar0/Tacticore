@@ -1,0 +1,57 @@
+{
+  "de_mirage": {
+    "pos_x": -606.4,
+    "pos_y": -855.1,
+    "scale": 5.0
+  },
+  "de_dust2": {
+    "pos_x": -2000,
+    "pos_y": 3000,
+    "scale": 2.5
+  },
+  "de_inferno": {
+    "pos_x": -2500,
+    "pos_y": 3500,
+    "scale": 2.8
+  },
+  "de_nuke": {
+    "pos_x": -3500,
+    "pos_y": 4500,
+    "scale": 3.2
+  },
+  "de_overpass": {
+    "pos_x": -2800,
+    "pos_y": 3800,
+    "scale": 2.9
+  },
+  "de_train": {
+    "pos_x": -3200,
+    "pos_y": 4200,
+    "scale": 3.1
+  },
+  "de_vertigo": {
+    "pos_x": -2200,
+    "pos_y": 3200,
+    "scale": 2.6
+  },
+  "de_cache": {
+    "pos_x": -2400,
+    "pos_y": 3400,
+    "scale": 2.7
+  },
+  "de_cobblestone": {
+    "pos_x": -2600,
+    "pos_y": 3600,
+    "scale": 2.8
+  },
+  "de_ancient": {
+    "pos_x": -2400,
+    "pos_y": 3400,
+    "scale": 2.7
+  },
+  "de_anubis": {
+    "pos_x": -2300,
+    "pos_y": 3300,
+    "scale": 2.6
+  }
+}
