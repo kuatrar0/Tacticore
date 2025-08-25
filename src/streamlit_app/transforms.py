@@ -1,10 +1,11 @@
 """
 Transform functions for the Streamlit labeling app.
+Enhanced version with more detailed context for ML training.
 """
 
 import pandas as pd
 import numpy as np
-from typing import Dict, Tuple, Optional, List
+from typing import Dict, Tuple, Optional, List, Any
 import json
 from pathlib import Path
 
@@ -330,7 +331,12 @@ def calculate_time_in_round(kill_tick: int, rounds_df: pd.DataFrame, tickrate: i
     """
     if rounds_df.empty:
         # If no round data, estimate based on tick
-        return kill_tick / tickrate
+        # For CS2, rounds typically start around tick 0, 3000, 6000, etc.
+        # Estimate round start based on typical round duration
+        estimated_round_start = (kill_tick // 3000) * 3000
+        time_in_round = (kill_tick - estimated_round_start) / tickrate
+        # Ensure time is reasonable (CS2 rounds are ~115 seconds max)
+        return min(time_in_round, 115.0)
     
     # Find the round this kill belongs to
     for _, round_data in rounds_df.iterrows():
@@ -338,10 +344,14 @@ def calculate_time_in_round(kill_tick: int, rounds_df: pd.DataFrame, tickrate: i
         end_tick = round_data.get('end_tick', float('inf'))
         
         if start_tick <= kill_tick <= end_tick:
-            return (kill_tick - start_tick) / tickrate
+            time_in_round = (kill_tick - start_tick) / tickrate
+            # Ensure time is reasonable
+            return min(time_in_round, 115.0)
     
-    # Fallback to tick-based calculation
-    return kill_tick / tickrate
+    # Fallback to tick-based calculation with better estimation
+    estimated_round_start = (kill_tick // 3000) * 3000
+    time_in_round = (kill_tick - estimated_round_start) / tickrate
+    return min(time_in_round, 115.0)
 
 
 def calculate_distance_2d(x1: float, y1: float, x2: float, y2: float) -> float:
@@ -380,8 +390,9 @@ def calculate_approach_alignment(attacker_x: float, attacker_y: float,
     to_victim_mag = np.sqrt(to_victim_x**2 + to_victim_y**2)
     vel_mag = np.sqrt(attacker_vel_x**2 + attacker_vel_y**2)
     
-    if to_victim_mag == 0 or vel_mag == 0:
-        return 90.0  # Default to perpendicular
+    # If attacker is not moving or vectors are invalid, return None
+    if to_victim_mag == 0 or vel_mag < 10:  # Minimum movement threshold
+        return None  # Return None instead of 90.0
     
     to_victim_x /= to_victim_mag
     to_victim_y /= to_victim_mag
@@ -582,5 +593,494 @@ def get_kill_context(kill_row: pd.Series, ticks_df: pd.DataFrame,
             'attacker_image_x': 0, 'attacker_image_y': 0,
             'victim_image_x': 0, 'victim_image_y': 0
         })
+    
+    return context
+
+
+def detect_victim_awareness(kill_tick: int, victim_name: str, attacker_name: str, 
+                            ticks_df: pd.DataFrame, time_window_seconds: float = 3.0) -> Dict[str, Any]:
+    """
+    Detect if victim was aware of the attacker before death.
+    
+    Logic:
+    - Backstab: Killer was NOT in victim's field of view at moment of death
+    - Awareness: Victim was aware of killer in the seconds BEFORE the kill
+    
+    Args:
+        kill_tick: Tick when the kill occurred
+        victim_name: Name of the victim
+        attacker_name: Name of the attacker
+        ticks_df: DataFrame with tick data
+        time_window_seconds: Time window to check for awareness before kill
+        
+    Returns:
+        Dictionary with awareness information
+    """
+    time_window_ticks = int(time_window_seconds * 64)
+    
+    awareness = {
+        'victim_was_aware': False,
+        'victim_was_watching': False,
+        'victim_was_backstabbed': False,
+        'time_since_last_sight': None,
+        'awareness_confidence': 0.0,
+        'angle_to_attacker': None,
+        'victim_view_angle': None,
+        'angle_difference': None,
+        'awareness_detected_at_tick': None
+    }
+    
+    # Get victim and attacker positions at kill time
+    victim_tick = find_nearest_tick(kill_tick, ticks_df, victim_name)
+    attacker_tick = find_nearest_tick(kill_tick, ticks_df, attacker_name)
+    
+    if victim_tick is not None and attacker_tick is not None:
+        # Get positions at kill time
+        victim_x = victim_tick.get('X', 0)
+        victim_y = victim_tick.get('Y', 0)
+        attacker_x = attacker_tick.get('X', 0)
+        attacker_y = attacker_tick.get('Y', 0)
+        
+        # Calculate angle from victim to attacker at kill time
+        to_attacker_x = attacker_x - victim_x
+        to_attacker_y = attacker_y - victim_y
+        
+        # Calculate the angle where the attacker is relative to victim (0-360 degrees)
+        angle_to_attacker = np.degrees(np.arctan2(to_attacker_y, to_attacker_x))
+        angle_to_attacker = (angle_to_attacker + 360) % 360
+        
+        # Get victim's view angle at kill time
+        victim_view_angle = victim_tick.get('view_x', victim_tick.get('viewX', 0))
+        victim_view_angle = (victim_view_angle + 360) % 360
+        
+        # Calculate angle difference at kill time
+        angle_diff = abs(victim_view_angle - angle_to_attacker)
+        angle_diff = min(angle_diff, 360 - angle_diff)
+        
+        # Store angles for debugging
+        awareness['angle_to_attacker'] = angle_to_attacker
+        awareness['victim_view_angle'] = victim_view_angle
+        awareness['angle_difference'] = angle_diff
+        
+        # DETERMINE BACKSTAB: If attacker was NOT in victim's field of view at death
+        # Field of view is typically ~180 degrees (90 degrees to each side)
+        if angle_diff > 90:
+            awareness['victim_was_backstabbed'] = True
+            awareness['awareness_confidence'] = 0.9
+        else:
+            awareness['victim_was_backstabbed'] = False
+            awareness['awareness_confidence'] = 0.8
+        
+        # DETERMINE AWARENESS: Check if victim was aware of attacker BEFORE the kill
+        # Look at victim's ticks in the time window before death
+        victim_ticks_before = ticks_df[
+            (ticks_df.get('name', ticks_df.get('player_name', '')) == victim_name) &
+            (ticks_df['tick'] >= kill_tick - time_window_ticks) &
+            (ticks_df['tick'] < kill_tick)
+        ].copy()
+        
+        if not victim_ticks_before.empty:
+            # Check each tick to see if victim was looking towards attacker
+            for _, tick_data in victim_ticks_before.iterrows():
+                tick_view_angle = tick_data.get('view_x', tick_data.get('viewX', 0))
+                tick_view_angle = (tick_view_angle + 360) % 360
+                
+                # Calculate angle difference at this tick
+                tick_angle_diff = abs(tick_view_angle - angle_to_attacker)
+                tick_angle_diff = min(tick_angle_diff, 360 - tick_angle_diff)
+                
+                # If victim was looking within 90 degrees of attacker, they were aware
+                if tick_angle_diff < 90:
+                    awareness['victim_was_aware'] = True
+                    awareness['victim_was_watching'] = True
+                    awareness['awareness_detected_at_tick'] = tick_data['tick']
+                    awareness['time_since_last_sight'] = (kill_tick - tick_data['tick']) / 64
+                    awareness['awareness_confidence'] = 1.0 - (tick_angle_diff / 90.0)
+                    break
+        
+        # If no awareness detected in the time window, victim was not aware
+        if not awareness['victim_was_aware']:
+            awareness['awareness_confidence'] = 0.7  # High confidence they weren't aware
+    
+    return awareness
+
+
+def detect_sound_cues(kill_tick: int, victim_name: str, attacker_name: str, ticks_df: pd.DataFrame, 
+                       damages_df: pd.DataFrame, shots_df: pd.DataFrame, 
+                       time_window_seconds: float = 3.0) -> Dict[str, Any]:
+    """
+    Detect if victim had sound cues about the attacker before death.
+    
+    Args:
+        kill_tick: Tick when the kill occurred
+        victim_name: Name of the victim
+        ticks_df: DataFrame with tick data
+        damages_df: DataFrame with damage events
+        shots_df: DataFrame with shot events
+        time_window_seconds: Time window to check for sound cues
+        
+    Returns:
+        Dictionary with sound cue information
+    """
+    time_window_ticks = int(time_window_seconds * 64)  # Assuming 64 tickrate
+    
+    sound_cues = {
+        'had_sound_cue': False,
+        'sound_cue_types': [],
+        'sound_cue_count': 0,
+        'last_sound_tick': None,
+        'time_since_last_sound': None,
+        'attacker_visible': False,
+        'attacker_distance_when_heard': None
+    }
+    
+    # Check for damage events (victim taking damage)
+    if not damages_df.empty and 'victim_name' in damages_df.columns and 'tick' in damages_df.columns:
+        victim_damages = damages_df[
+            (damages_df['victim_name'] == victim_name) &
+            (damages_df['tick'] >= kill_tick - time_window_ticks) &
+            (damages_df['tick'] < kill_tick)
+        ]
+        
+        if not victim_damages.empty:
+            sound_cues['had_sound_cue'] = True
+            sound_cues['sound_cue_types'].append('damage_taken')
+            sound_cues['sound_cue_count'] += len(victim_damages)
+            
+            # Get last sound cue
+            last_damage = victim_damages.iloc[-1]
+            sound_cues['last_sound_tick'] = last_damage['tick']
+            sound_cues['time_since_last_sound'] = (kill_tick - last_damage['tick']) / 64
+    
+    # Check for nearby shots
+    if not shots_df.empty and 'tick' in shots_df.columns:
+        # Get victim position at kill time
+        victim_tick = find_nearest_tick(kill_tick, ticks_df, victim_name)
+        if victim_tick is not None:
+            victim_x = victim_tick.get('X', 0)
+            victim_y = victim_tick.get('Y', 0)
+            
+            # Find shots near victim in time window
+            nearby_shots = shots_df[
+                (shots_df['tick'] >= kill_tick - time_window_ticks) &
+                (shots_df['tick'] < kill_tick)
+            ].copy()
+            
+            if not nearby_shots.empty:
+                # Calculate distances to shots
+                nearby_shots['distance'] = calculate_distance_2d(
+                    victim_x, victim_y,
+                    nearby_shots.get('X', 0), nearby_shots.get('Y', 0)
+                )
+                
+                # Consider shots within 1000 units as audible
+                audible_shots = nearby_shots[nearby_shots['distance'] <= 1000]
+                
+                if not audible_shots.empty:
+                    sound_cues['had_sound_cue'] = True
+                    sound_cues['sound_cue_types'].append('nearby_shots')
+                    sound_cues['sound_cue_count'] += len(audible_shots)
+                    
+                    # Get closest shot
+                    closest_shot = audible_shots.loc[audible_shots['distance'].idxmin()]
+                    sound_cues['attacker_distance_when_heard'] = closest_shot['distance']
+    
+    # Check for attacker visibility (line of sight)
+    attacker_tick = find_nearest_tick(kill_tick, ticks_df, attacker_name)
+    victim_tick = find_nearest_tick(kill_tick, ticks_df, victim_name)
+    if attacker_tick is not None and victim_tick is not None:
+        # Simple line of sight check (can be enhanced with map geometry)
+        attacker_x = attacker_tick.get('X', 0)
+        attacker_y = attacker_tick.get('Y', 0)
+        victim_x = victim_tick.get('X', 0)
+        victim_y = victim_tick.get('Y', 0)
+        
+        distance = calculate_distance_2d(attacker_x, attacker_y, victim_x, victim_y)
+        # Assume visibility if distance is reasonable (can be enhanced)
+        sound_cues['attacker_visible'] = distance <= 2000
+    
+    return sound_cues
+
+
+def analyze_round_context(kill_tick: int, rounds_df: pd.DataFrame, 
+                         bomb_df: pd.DataFrame, tickrate: int = 64) -> Dict[str, Any]:
+    """
+    Analyze round context at the time of kill.
+    
+    Args:
+        kill_tick: Tick when the kill occurred
+        rounds_df: DataFrame with round data
+        bomb_df: DataFrame with bomb events
+        tickrate: Game tickrate
+        
+    Returns:
+        Dictionary with round context information
+    """
+    round_context = {
+        'round_number': None,
+        'time_in_round_s': 0,
+        'round_phase': 'unknown',
+        'bomb_planted': False,
+        'time_since_bomb_plant': None,
+        'time_until_bomb_explode': None,
+        'players_alive_t': 0,
+        'players_alive_ct': 0,
+        'round_win_probability': 0.5
+    }
+    
+    # Find current round
+    if not rounds_df.empty:
+        for _, round_data in rounds_df.iterrows():
+            start_tick = round_data.get('start_tick', 0)
+            end_tick = round_data.get('end_tick', float('inf'))
+            
+            if start_tick <= kill_tick <= end_tick:
+                round_context['round_number'] = round_data.get('round', 0)
+                round_context['time_in_round_s'] = (kill_tick - start_tick) / tickrate
+                
+                # Determine round phase based on time
+                time_in_round = round_context['time_in_round_s']
+                if time_in_round < 30:
+                    round_context['round_phase'] = 'early'
+                elif time_in_round < 90:
+                    round_context['round_phase'] = 'mid'
+                else:
+                    round_context['round_phase'] = 'late'
+                break
+    
+    # Check bomb status
+    if not bomb_df.empty:
+        round_bomb_events = bomb_df[
+            (bomb_df['tick'] <= kill_tick) &
+            (bomb_df['tick'] >= kill_tick - 30000)  # Check last 30 seconds
+        ]
+        
+        if not round_bomb_events.empty:
+            # Check if bomb is planted
+            if 'bomb_action' in round_bomb_events.columns:
+                planted_events = round_bomb_events[
+                    round_bomb_events['bomb_action'].str.contains('plant', case=False, na=False)
+                ]
+            else:
+                # If no bomb_action column, assume no bomb planted
+                planted_events = pd.DataFrame()
+            
+            if not planted_events.empty:
+                round_context['bomb_planted'] = True
+                last_plant = planted_events.iloc[-1]
+                time_since_plant = (kill_tick - last_plant['tick']) / tickrate
+                round_context['time_since_bomb_plant'] = time_since_plant
+                
+                # Calculate time until bomb explosion (40 seconds after plant)
+                if time_since_plant < 40:
+                    round_context['time_until_bomb_explode'] = 40 - time_since_plant
+    
+    return round_context
+
+
+def analyze_utility_context(kill_tick: int, kill_x: float, kill_y: float,
+                           grenades_df: pd.DataFrame, smokes_df: pd.DataFrame,
+                           infernos_df: pd.DataFrame, time_window_seconds: float = 5.0) -> Dict[str, Any]:
+    """
+    Analyze utility context around the kill.
+    
+    Args:
+        kill_tick: Tick when the kill occurred
+        kill_x, kill_y: Position of the kill
+        grenades_df: DataFrame with grenade data
+        smokes_df: DataFrame with smoke data
+        infernos_df: DataFrame with molotov/incendiary data
+        time_window_seconds: Time window to check for utility
+        
+    Returns:
+        Dictionary with utility context information
+    """
+    time_window_ticks = int(time_window_seconds * 64)
+    
+    utility_context = {
+        'flash_active': False,
+        'smoke_active': False,
+        'molotov_active': False,
+        'he_active': False,
+        'utility_count': 0,
+        'closest_utility_distance': None,
+        'utility_thrower': None,
+        'time_since_utility': None,
+        'utility_affecting_kill': False
+    }
+    
+    # Check grenades
+    if not grenades_df.empty and 'tick' in grenades_df.columns:
+        nearby_grenades = grenades_df[
+            (grenades_df['tick'] >= kill_tick - time_window_ticks) &
+            (grenades_df['tick'] <= kill_tick + time_window_ticks)
+        ].copy()
+        
+        if not nearby_grenades.empty:
+            # Calculate distances
+            nearby_grenades['distance'] = calculate_distance_2d(
+                kill_x, kill_y,
+                nearby_grenades.get('X', 0), nearby_grenades.get('Y', 0)
+            )
+            
+            # Check for active utility within 500 units
+            active_utility = nearby_grenades[nearby_grenades['distance'] <= 500]
+            
+            if not active_utility.empty:
+                utility_context['utility_count'] = len(active_utility)
+                utility_context['closest_utility_distance'] = active_utility['distance'].min()
+                
+                # Get closest utility
+                closest_utility = active_utility.loc[active_utility['distance'].idxmin()]
+                utility_context['utility_thrower'] = closest_utility.get('thrower', 'Unknown')
+                utility_context['time_since_utility'] = (kill_tick - closest_utility['tick']) / 64
+                
+                # Check utility types
+                for _, utility in active_utility.iterrows():
+                    grenade_type = str(utility.get('grenade_type', '')).lower()
+                    
+                    if 'flash' in grenade_type:
+                        utility_context['flash_active'] = True
+                    elif 'smoke' in grenade_type:
+                        utility_context['smoke_active'] = True
+                    elif 'molotov' in grenade_type or 'incendiary' in grenade_type:
+                        utility_context['molotov_active'] = True
+                    elif 'he' in grenade_type:
+                        utility_context['he_active'] = True
+                
+                # Determine if utility affected the kill
+                if utility_context['flash_active'] or utility_context['smoke_active']:
+                    utility_context['utility_affecting_kill'] = True
+    
+    # Check smokes
+    if not smokes_df.empty and 'tick' in smokes_df.columns:
+        nearby_smokes = smokes_df[
+            (smokes_df['tick'] >= kill_tick - time_window_ticks) &
+            (smokes_df['tick'] <= kill_tick + time_window_ticks)
+        ].copy()
+        
+        if not nearby_smokes.empty:
+            nearby_smokes['distance'] = calculate_distance_2d(
+                kill_x, kill_y,
+                nearby_smokes.get('X', 0), nearby_smokes.get('Y', 0)
+            )
+            
+            if (nearby_smokes['distance'] <= 500).any():
+                utility_context['smoke_active'] = True
+                utility_context['utility_affecting_kill'] = True
+    
+    # Check infernos (molotovs)
+    if not infernos_df.empty and 'tick' in infernos_df.columns:
+        nearby_infernos = infernos_df[
+            (infernos_df['tick'] >= kill_tick - time_window_ticks) &
+            (infernos_df['tick'] <= kill_tick + time_window_ticks)
+        ].copy()
+        
+        if not nearby_infernos.empty:
+            nearby_infernos['distance'] = calculate_distance_2d(
+                kill_x, kill_y,
+                nearby_infernos.get('X', 0), nearby_infernos.get('Y', 0)
+            )
+            
+            if (nearby_infernos['distance'] <= 500).any():
+                utility_context['molotov_active'] = True
+                utility_context['utility_affecting_kill'] = True
+    
+    return utility_context
+
+
+def get_enhanced_kill_context(kill_row: pd.Series, ticks_df: pd.DataFrame, 
+                             rounds_df: pd.DataFrame, grenades_df: pd.DataFrame,
+                             damages_df: pd.DataFrame, shots_df: pd.DataFrame,
+                             smokes_df: pd.DataFrame, infernos_df: pd.DataFrame,
+                             bomb_df: pd.DataFrame, map_data: Dict, 
+                             tickrate: int = 64, x_adjust: float = 25, y_adjust: float = 0, 
+                             use_advanced: bool = True) -> Dict:
+    """
+    Get comprehensive enhanced context for a kill event.
+    
+    Args:
+        kill_row: Row from kills DataFrame
+        ticks_df: DataFrame with tick data
+        rounds_df: DataFrame with round data
+        grenades_df: DataFrame with grenade data
+        damages_df: DataFrame with damage events
+        shots_df: DataFrame with shot events
+        smokes_df: DataFrame with smoke events
+        infernos_df: DataFrame with molotov events
+        bomb_df: DataFrame with bomb events
+        map_data: Map coordinate data
+        tickrate: Game tickrate
+        x_adjust: Fine-tuning adjustment for X axis
+        y_adjust: Fine-tuning adjustment for Y axis
+        use_advanced: Whether to use advanced coordinate transformation
+        
+    Returns:
+        Dictionary with enhanced kill context
+    """
+    # Get basic context first
+    context = get_kill_context(kill_row, ticks_df, rounds_df, grenades_df, 
+                              map_data, tickrate, x_adjust, y_adjust, use_advanced)
+    
+    # Add enhanced context
+    kill_tick = context['kill_tick']
+    victim_name = context['victim_name']
+    attacker_name = context['attacker_name']
+    
+    # Sound cue analysis
+    sound_cues = detect_sound_cues(kill_tick, victim_name, attacker_name, ticks_df, damages_df, shots_df)
+    context.update(sound_cues)
+    
+    # Victim awareness analysis
+    awareness = detect_victim_awareness(kill_tick, victim_name, attacker_name, ticks_df)
+    context.update(awareness)
+    
+    # Round context analysis
+    round_context = analyze_round_context(kill_tick, rounds_df, bomb_df, tickrate)
+    context.update(round_context)
+    
+    # Utility context analysis
+    utility_context = analyze_utility_context(
+        kill_tick, context['victim_x'], context['victim_y'],
+        grenades_df, smokes_df, infernos_df
+    )
+    context.update(utility_context)
+    
+    # Add player state analysis
+    attacker_tick = find_nearest_tick(kill_tick, ticks_df, attacker_name)
+    victim_tick = find_nearest_tick(kill_tick, ticks_df, victim_name)
+    
+    if attacker_tick is not None:
+        context.update({
+            'attacker_is_alive': attacker_tick.get('is_alive', True),
+            'attacker_is_ducking': attacker_tick.get('is_ducking', False),
+            'attacker_is_scoped': attacker_tick.get('is_scoped', False),
+            'attacker_is_moving': attacker_tick.get('is_moving', False),
+            'attacker_movement_speed': attacker_tick.get('movement_speed', 0),
+            'attacker_has_primary': attacker_tick.get('has_primary', False),
+            'attacker_has_secondary': attacker_tick.get('has_secondary', False),
+            'attacker_has_utility': attacker_tick.get('has_utility', False),
+        })
+    
+    if victim_tick is not None:
+        context.update({
+            'victim_is_alive': victim_tick.get('is_alive', True),
+            'victim_is_ducking': victim_tick.get('is_ducking', False),
+            'victim_is_scoped': victim_tick.get('is_scoped', False),
+            'victim_is_moving': victim_tick.get('is_moving', False),
+            'victim_movement_speed': victim_tick.get('movement_speed', 0),
+            'victim_has_primary': victim_tick.get('has_primary', False),
+            'victim_has_secondary': victim_tick.get('has_secondary', False),
+            'victim_has_utility': victim_tick.get('has_utility', False),
+        })
+    
+    # Add tactical analysis
+    context.update({
+        'kill_advantage': context.get('attacker_health', 100) - context.get('victim_health', 100),
+        'distance_category': 'close' if context['distance_xy'] < 500 else 'medium' if context['distance_xy'] < 1000 else 'far',
+        'is_eco_kill': context.get('attacker_health', 100) < 50 or context.get('victim_health', 100) < 50,
+        'is_trade_kill': False,  # Can be enhanced with kill chain analysis
+        'is_clutch_situation': False,  # Can be enhanced with player count analysis
+    })
     
     return context

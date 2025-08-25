@@ -4,6 +4,7 @@ CS2 Demo Parser - Convert .dem files to structured parquet datasets.
 
 This script uses AWPy to parse Counter-Strike 2 demo files and extract
 various game events and player data into parquet format for analysis.
+Enhanced version with more detailed context for ML training.
 """
 
 import argparse
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 import pandas as pd
 from tqdm import tqdm
+import numpy as np
 
 # Add src to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
@@ -29,6 +31,182 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def extract_enhanced_data(demo) -> Dict[str, pd.DataFrame]:
+    """
+    Extract enhanced data from demo with additional context.
+    
+    Args:
+        demo: AWPy Demo object
+        
+    Returns:
+        Dictionary of DataFrames with enhanced data
+    """
+    enhanced_data = {}
+    
+    # Extract basic tables
+    basic_tables = [
+        'ticks', 'kills', 'damages', 'shots', 'grenades', 
+        'smokes', 'infernos', 'bomb', 'rounds'
+    ]
+    
+    for table_name in basic_tables:
+        if hasattr(demo, table_name):
+            table_data = getattr(demo, table_name)
+            df = to_pandas_maybe(table_data)
+            if df is not None and not df.empty:
+                enhanced_data[table_name] = df
+    
+    # Extract additional context data
+    enhanced_data.update(extract_sound_events(demo))
+    enhanced_data.update(extract_player_states(demo))
+    enhanced_data.update(extract_round_context(demo))
+    
+    return enhanced_data
+
+
+def extract_sound_events(demo) -> Dict[str, pd.DataFrame]:
+    """
+    Extract sound-related events for audio context analysis.
+    
+    Args:
+        demo: AWPy Demo object
+        
+    Returns:
+        Dictionary with sound events DataFrames
+    """
+    sound_data = {}
+    
+    # Try to extract footsteps, weapon sounds, etc.
+    # Note: AWPy may not expose all sound events directly
+    # We'll work with what's available and enhance with derived features
+    
+    if hasattr(demo, 'damages'):
+        damages_df = to_pandas_maybe(demo.damages)
+        if damages_df is not None and not damages_df.empty:
+            # Add sound context to damages
+            damages_df['has_sound_cue'] = True
+            damages_df['sound_type'] = 'damage'
+            sound_data['damage_sounds'] = damages_df
+    
+    if hasattr(demo, 'shots'):
+        shots_df = to_pandas_maybe(demo.shots)
+        if shots_df is not None and not shots_df.empty:
+            # Add sound context to shots
+            shots_df['has_sound_cue'] = True
+            shots_df['sound_type'] = 'shot'
+            sound_data['shot_sounds'] = shots_df
+    
+    return sound_data
+
+
+def extract_player_states(demo) -> Dict[str, pd.DataFrame]:
+    """
+    Extract detailed player state information.
+    
+    Args:
+        demo: AWPy Demo object
+        
+    Returns:
+        Dictionary with player state DataFrames
+    """
+    player_data = {}
+    
+    if hasattr(demo, 'ticks'):
+        ticks_df = to_pandas_maybe(demo.ticks)
+        if ticks_df is not None and not ticks_df.empty:
+            # Enhance ticks with derived features
+            enhanced_ticks = enhance_ticks_data(ticks_df)
+            player_data['enhanced_ticks'] = enhanced_ticks
+    
+    return player_data
+
+
+def enhance_ticks_data(ticks_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Enhance tick data with derived features for better context.
+    
+    Args:
+        ticks_df: Original ticks DataFrame
+        
+    Returns:
+        Enhanced ticks DataFrame
+    """
+    if ticks_df.empty:
+        return ticks_df
+    
+    enhanced = ticks_df.copy()
+    
+    # Add derived features
+    enhanced['is_alive'] = enhanced.get('health', 100) > 0
+    enhanced['is_ducking'] = enhanced.get('ducking', False)
+    enhanced['is_scoped'] = enhanced.get('scoped', False)
+    
+    # Calculate movement speed
+    if 'vel_x' in enhanced.columns and 'vel_y' in enhanced.columns:
+        enhanced['movement_speed'] = np.sqrt(
+            enhanced['vel_x']**2 + enhanced['vel_y']**2
+        )
+        enhanced['is_moving'] = enhanced['movement_speed'] > 10
+    else:
+        enhanced['movement_speed'] = 0
+        enhanced['is_moving'] = False
+    
+    # Add weapon context
+    enhanced['has_primary'] = enhanced.get('primary_weapon', '') != ''
+    enhanced['has_secondary'] = enhanced.get('secondary_weapon', '') != ''
+    enhanced['has_utility'] = enhanced.get('utility_weapon', '') != ''
+    
+    return enhanced
+
+
+def extract_round_context(demo) -> Dict[str, pd.DataFrame]:
+    """
+    Extract round-level context information.
+    
+    Args:
+        demo: AWPy Demo object
+        
+    Returns:
+        Dictionary with round context DataFrames
+    """
+    round_data = {}
+    
+    if hasattr(demo, 'rounds'):
+        rounds_df = to_pandas_maybe(demo.rounds)
+        if rounds_df is not None and not rounds_df.empty:
+            # Enhance round data with additional context
+            enhanced_rounds = enhance_rounds_data(rounds_df)
+            round_data['enhanced_rounds'] = enhanced_rounds
+    
+    return round_data
+
+
+def enhance_rounds_data(rounds_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Enhance round data with additional context.
+    
+    Args:
+        rounds_df: Original rounds DataFrame
+        
+    Returns:
+        Enhanced rounds DataFrame
+    """
+    if rounds_df.empty:
+        return rounds_df
+    
+    enhanced = rounds_df.copy()
+    
+    # Add round phase information
+    enhanced['round_phase'] = 'unknown'
+    
+    # Add time-based features
+    if 'start_tick' in enhanced.columns and 'end_tick' in enhanced.columns:
+        enhanced['round_duration_ticks'] = enhanced['end_tick'] - enhanced['start_tick']
+        enhanced['round_duration_seconds'] = enhanced['round_duration_ticks'] / 64  # Assuming 64 tickrate
+    
+    return enhanced
 
 
 def parse_single_demo(demo_path: Path, output_dir: Path, partition_rounds: bool = False) -> Dict[str, int]:
@@ -61,9 +239,12 @@ def parse_single_demo(demo_path: Path, output_dir: Path, partition_rounds: bool 
         # Track saved data
         saved_data = {}
         
+        # Extract enhanced data
+        enhanced_data = extract_enhanced_data(demo)
+        
         # Define tables to extract (in order of importance)
         tables_to_extract = [
-            ('ticks', 'ticks.parquet'),
+            ('enhanced_ticks', 'ticks.parquet'),
             ('kills', 'kills.parquet'),
             ('damages', 'damages.parquet'),
             ('shots', 'shots.parquet'),
@@ -71,14 +252,15 @@ def parse_single_demo(demo_path: Path, output_dir: Path, partition_rounds: bool 
             ('smokes', 'smokes.parquet'),
             ('infernos', 'infernos.parquet'),
             ('bomb', 'bomb.parquet'),
-            ('rounds', 'rounds.parquet'),
+            ('enhanced_rounds', 'rounds.parquet'),
+            ('damage_sounds', 'damage_sounds.parquet'),
+            ('shot_sounds', 'shot_sounds.parquet'),
         ]
         
         # Extract each table
         for table_name, filename in tables_to_extract:
-            if hasattr(demo, table_name):
-                table_data = getattr(demo, table_name)
-                df = to_pandas_maybe(table_data)
+            if table_name in enhanced_data:
+                df = enhanced_data[table_name]
                 
                 if df is not None and not df.empty:
                     filepath = demo_output_dir / filename
