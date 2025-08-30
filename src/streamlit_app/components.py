@@ -118,8 +118,19 @@ def create_label_controls() -> Tuple[List[str], List[str]]:
         st.write("**Attacker Labels** (Multiple selection)")
         attacker_labels = st.multiselect(
             "Attacker",
-            ["good_decision", "bad_decision", "precise", "imprecise", 
-             "good_positioning", "bad_positioning", "other"],
+            [
+                # Essential Performance Labels
+                "precise", "good_positioning", "bad_positioning",
+                
+                # Essential Decision Making Labels
+                "good_utility_usage", "bad_utility_usage", "good_peek", "bad_peek",
+                
+                # Essential Situational Labels
+                "clutch_play", "choke", "entry_frag",
+                
+                # Legacy Labels (keeping for compatibility)
+                "good_decision", "bad_decision", "imprecise", "other"
+            ],
             key="attacker_labels"
         )
     
@@ -127,7 +138,10 @@ def create_label_controls() -> Tuple[List[str], List[str]]:
         st.write("**Victim Labels** (Multiple selection)")
         victim_labels = st.multiselect(
             "Victim",
-            ["exposed", "no_cover", "good_position", "mistake", "bad_clearing", "other"],
+            [
+                # Essential Victim Labels
+                "bad_clearing", "exposed", "no_cover", "good_position", "mistake", "other"
+            ],
             key="victim_labels"
         )
     
@@ -226,6 +240,23 @@ def display_kill_info(context: Dict) -> None:
     """
     st.subheader("Kill Information")
     
+    # Match and Round Information
+    if context.get('round_number') is not None:
+        st.markdown("**🎮 Match & Round Info**")
+        col_match, col_round = st.columns(2)
+        
+        with col_match:
+            team1 = context.get('team1_name', 'Team 1')
+            team2 = context.get('team2_name', 'Team 2')
+            score_t = context.get('match_score_t', 0)
+            score_ct = context.get('match_score_ct', 0)
+            st.write(f"**Match Score:** {team1} {score_t} - {score_ct} {team2}")
+        
+        with col_round:
+            round_num = context.get('round_number', 0)
+            round_phase = context.get('round_phase', 'unknown')
+            st.write(f"**Round:** {round_num} ({round_phase})")
+    
     col1, col2 = st.columns(2)
     
     with col1:
@@ -235,6 +266,30 @@ def display_kill_info(context: Dict) -> None:
         st.write(f"Attacker Side: {context.get('side', 'Unknown')}")
         st.write(f"Attacker Place: {context.get('place', 'Unknown')}")
         st.write(f"Headshot: {context.get('headshot', False)}")
+        
+        # Weapon information
+        st.write("**Weapons**")
+        attacker_weapon = context.get('attacker_weapon', 'Unknown')
+        victim_weapon = context.get('victim_weapon', 'Unknown')
+        st.write(f"Attacker Weapon: {attacker_weapon}")
+        st.write(f"Victim Weapon: {victim_weapon}")
+        
+        # Equipment advantage analysis
+        if attacker_weapon != 'Unknown' and victim_weapon != 'Unknown':
+            st.write("**Equipment Analysis:**")
+            # Simple weapon tier analysis
+            primary_weapons = ['ak47', 'm4a1', 'awp', 'sg553', 'aug', 'famas', 'galil']
+            secondary_weapons = ['deagle', 'usp', 'glock', 'p250', 'tec9', 'cz75']
+            
+            attacker_has_primary = any(weapon in attacker_weapon.lower() for weapon in primary_weapons)
+            victim_has_primary = any(weapon in victim_weapon.lower() for weapon in primary_weapons)
+            
+            if attacker_has_primary and not victim_has_primary:
+                st.write("✅ Attacker has equipment advantage")
+            elif not attacker_has_primary and victim_has_primary:
+                st.write("❌ Attacker has equipment disadvantage")
+            else:
+                st.write("⚖️ Equipment is balanced")
     
     with col2:
         st.write("**Context**")
@@ -243,8 +298,19 @@ def display_kill_info(context: Dict) -> None:
         approach_align = context.get('approach_align_deg')
         if approach_align is not None:
             st.write(f"Approach Alignment: {approach_align:.1f}°")
+            # Add interpretation
+            if approach_align < 30:
+                st.write("🎯 Excellent alignment (moving directly toward victim)")
+            elif approach_align < 60:
+                st.write("✅ Good alignment (moving toward victim)")
+            elif approach_align < 90:
+                st.write("⚠️ Fair alignment (somewhat toward victim)")
+            elif approach_align < 120:
+                st.write("❌ Poor alignment (moving sideways)")
+            else:
+                st.write("❌ Very poor alignment (moving away from victim)")
         else:
-            st.write("Approach Alignment: Not moving")
+            st.write("Approach Alignment: Not moving (stationary)")
         st.write(f"Attacker Health: {context.get('attacker_health', 100)}")
         st.write(f"Victim Health: {context.get('victim_health', 100)}")
         
@@ -407,61 +473,199 @@ def create_export_button(labeled_data: List[Dict]) -> None:
     st.success(f"Ready to export {len(labeled_data)} labeled kills")
 
 
-def create_file_uploaders() -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+def create_file_uploaders() -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame], 
+                                    Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame], 
+                                    Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     """
-    Create file upload widgets.
+    Create file upload widgets with bulk upload support.
     
     Returns:
-        Tuple of (kills_df, ticks_df, grenades_df)
+        Tuple of (kills_df, ticks_df, grenades_df, damages_df, shots_df, smokes_df, infernos_df, bomb_df)
     """
     st.header("Upload Data Files")
     
-    # Kills file (required)
-    kills_file = st.file_uploader(
-        "Upload kills.parquet (required)", 
-        type=['parquet'],
-        key="kills_upload"
+    # Bulk upload option
+    upload_method = st.radio(
+        "Upload Method:",
+        ["Bulk Upload (All files at once)", "Individual Upload"],
+        key="upload_method"
     )
     
     kills_df = None
-    if kills_file is not None:
-        try:
-            kills_df = pd.read_parquet(kills_file)
-            st.success(f"Loaded {len(kills_df)} kills")
-        except Exception as e:
-            st.error(f"Error loading kills file: {e}")
-    
-    # Ticks file (required)
-    ticks_file = st.file_uploader(
-        "Upload ticks.parquet (required)", 
-        type=['parquet'],
-        key="ticks_upload"
-    )
-    
     ticks_df = None
-    if ticks_file is not None:
-        try:
-            ticks_df = pd.read_parquet(ticks_file)
-            st.success(f"Loaded {len(ticks_df)} ticks")
-        except Exception as e:
-            st.error(f"Error loading ticks file: {e}")
-    
-    # Grenades file (optional)
-    grenades_file = st.file_uploader(
-        "Upload grenades.parquet (optional)", 
-        type=['parquet'],
-        key="grenades_upload"
-    )
-    
     grenades_df = None
-    if grenades_file is not None:
-        try:
-            grenades_df = pd.read_parquet(grenades_file)
-            st.success(f"Loaded {len(grenades_df)} grenade events")
-        except Exception as e:
-            st.error(f"Error loading grenades file: {e}")
+    damages_df = None
+    shots_df = None
+    smokes_df = None
+    infernos_df = None
+    bomb_df = None
+    rounds_df = None
     
-    return kills_df, ticks_df, grenades_df
+    if upload_method == "Bulk Upload (All files at once)":
+        st.markdown("**📁 Bulk Upload - Select all your .parquet files:**")
+        st.info("💡 **Tip:** You can select multiple files by holding Ctrl (or Cmd on Mac) while clicking, or drag and drop all your .parquet files at once!")
+        
+        # Show expected file types
+        with st.expander("📋 Expected File Types"):
+            st.markdown("""
+            **Required Files:**
+            - `kills.parquet` - Kill events data
+            - `ticks.parquet` - Player position and state data
+            
+            **Optional Files (for enhanced analysis):**
+            - `grenades.parquet` - Grenade events
+            - `damages.parquet` - Damage events
+            - `shots.parquet` - Shot events
+            - `smokes.parquet` - Smoke events
+            - `infernos.parquet` - Molotov/incendiary events
+            - `bomb.parquet` - Bomb events
+            - `rounds.parquet` - Round information
+            """)
+        
+        uploaded_files = st.file_uploader(
+            "Upload all .parquet files at once",
+            type=['parquet'],
+            accept_multiple_files=True,
+            key="bulk_upload"
+        )
+        
+        if uploaded_files:
+            st.success(f"📦 Uploaded {len(uploaded_files)} files")
+            
+            # Process each uploaded file
+            for uploaded_file in uploaded_files:
+                try:
+                    filename = uploaded_file.name.lower()
+                    
+                    if 'kill' in filename:
+                        kills_df = pd.read_parquet(uploaded_file)
+                        st.success(f"✅ Loaded kills: {len(kills_df)} kills from {uploaded_file.name}")
+                    elif 'tick' in filename:
+                        ticks_df = pd.read_parquet(uploaded_file)
+                        st.success(f"✅ Loaded ticks: {len(ticks_df)} ticks from {uploaded_file.name}")
+                    elif 'grenade' in filename or 'flash' in filename or 'smoke' in filename or 'molotov' in filename:
+                        grenades_df = pd.read_parquet(uploaded_file)
+                        st.success(f"✅ Loaded grenades: {len(grenades_df)} events from {uploaded_file.name}")
+                    elif 'round' in filename:
+                        rounds_df = pd.read_parquet(uploaded_file)
+                        st.success(f"📋 Loaded rounds: {len(rounds_df)} rounds from {uploaded_file.name}")
+                    elif 'bomb' in filename:
+                        bomb_df = pd.read_parquet(uploaded_file)
+                        st.success(f"💣 Loaded bomb: {len(bomb_df)} events from {uploaded_file.name}")
+                    elif 'damage' in filename:
+                        damages_df = pd.read_parquet(uploaded_file)
+                        st.success(f"💥 Loaded damage: {len(damages_df)} events from {uploaded_file.name}")
+                    elif 'shot' in filename:
+                        shots_df = pd.read_parquet(uploaded_file)
+                        st.success(f"🔫 Loaded shots: {len(shots_df)} events from {uploaded_file.name}")
+                    elif 'smoke' in filename:
+                        smokes_df = pd.read_parquet(uploaded_file)
+                        st.success(f"💨 Loaded smokes: {len(smokes_df)} events from {uploaded_file.name}")
+                    elif 'inferno' in filename or 'molotov' in filename:
+                        infernos_df = pd.read_parquet(uploaded_file)
+                        st.success(f"🔥 Loaded infernos: {len(infernos_df)} events from {uploaded_file.name}")
+                    else:
+                        st.warning(f"❓ Unknown file type: {uploaded_file.name}")
+                        
+                except Exception as e:
+                    st.error(f"❌ Error loading {uploaded_file.name}: {e}")
+            
+            # Show summary
+            if kills_df is not None or ticks_df is not None or grenades_df is not None:
+                st.markdown("**📊 Upload Summary:**")
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    if kills_df is not None:
+                        st.success(f"Kills: {len(kills_df)}")
+                    else:
+                        st.error("Kills: Missing")
+                    
+                    if ticks_df is not None:
+                        st.success(f"Ticks: {len(ticks_df)}")
+                    else:
+                        st.error("Ticks: Missing")
+                
+                with col2:
+                    if grenades_df is not None:
+                        st.success(f"Grenades: {len(grenades_df)}")
+                    else:
+                        st.info("Grenades: Optional")
+                    
+                    if damages_df is not None:
+                        st.success(f"Damage: {len(damages_df)}")
+                    else:
+                        st.info("Damage: Optional")
+                
+                with col3:
+                    if shots_df is not None:
+                        st.success(f"Shots: {len(shots_df)}")
+                    else:
+                        st.info("Shots: Optional")
+                    
+                    if bomb_df is not None:
+                        st.success(f"Bomb: {len(bomb_df)}")
+                    else:
+                        st.info("Bomb: Optional")
+                
+                with col4:
+                    if smokes_df is not None:
+                        st.success(f"Smokes: {len(smokes_df)}")
+                    else:
+                        st.info("Smokes: Optional")
+                    
+                    if infernos_df is not None:
+                        st.success(f"Infernos: {len(infernos_df)}")
+                    else:
+                        st.info("Infernos: Optional")
+    
+    else:
+        # Individual upload (original method)
+        st.markdown("**📁 Individual Upload:**")
+        
+        # Kills file (required)
+        kills_file = st.file_uploader(
+            "Upload kills.parquet (required)", 
+            type=['parquet'],
+            key="kills_upload"
+        )
+        
+        if kills_file is not None:
+            try:
+                kills_df = pd.read_parquet(kills_file)
+                st.success(f"Loaded {len(kills_df)} kills")
+            except Exception as e:
+                st.error(f"Error loading kills file: {e}")
+        
+        # Ticks file (required)
+        ticks_file = st.file_uploader(
+            "Upload ticks.parquet (required)", 
+            type=['parquet'],
+            key="ticks_upload"
+        )
+        
+        if ticks_file is not None:
+            try:
+                ticks_df = pd.read_parquet(ticks_file)
+                st.success(f"Loaded {len(ticks_df)} ticks")
+            except Exception as e:
+                st.error(f"Error loading ticks file: {e}")
+        
+        # Grenades file (optional)
+        grenades_file = st.file_uploader(
+            "Upload grenades.parquet (optional)", 
+            type=['parquet'],
+            key="grenades_upload"
+        )
+        
+        if grenades_file is not None:
+            try:
+                grenades_df = pd.read_parquet(grenades_file)
+                st.success(f"Loaded {len(grenades_df)} grenade events")
+            except Exception as e:
+                st.error(f"Error loading grenades file: {e}")
+    
+    return kills_df, ticks_df, grenades_df, damages_df, shots_df, smokes_df, infernos_df, bomb_df, rounds_df
 
 
 def create_labeled_data_importer() -> None:
@@ -794,8 +998,18 @@ def create_ml_training_controls(filtered_kills: pd.DataFrame, labeled_data: List
         }
     
     # Active learning options
-    st.sidebar.markdown("**Active Learning:**")
+    st.sidebar.markdown("**🎯 Active Learning:**")
     enable_active_learning = st.sidebar.checkbox("Enable Active Learning", value=False)
+    
+    if enable_active_learning:
+        st.sidebar.markdown("🟢 **Active Learning Enabled**")
+        st.sidebar.markdown("• Model will suggest uncertain kills to label")
+        st.sidebar.markdown("• Auto-retrains when you add new labels")
+        st.sidebar.markdown("• Prioritizes kills that improve the model most")
+    else:
+        st.sidebar.markdown("🔴 **Active Learning Disabled**")
+        st.sidebar.markdown("• Manual labeling only")
+        st.sidebar.markdown("• No automatic suggestions")
     
     if enable_active_learning and len(labeled_data) > 10:
         ml_controls['active_learning'] = {
@@ -809,45 +1023,172 @@ def create_ml_training_controls(filtered_kills: pd.DataFrame, labeled_data: List
         
         # Check if we have enough labeled data
         if len(labeled_data) < 10:
-            st.sidebar.warning("Need at least 10 labeled kills for active learning")
+            st.sidebar.warning("⚠️ **Need at least 10 labeled kills for active learning**")
+            st.sidebar.markdown(f"• Current: {len(labeled_data)} labeled kills")
+            st.sidebar.markdown(f"• Required: 10+ labeled kills")
         else:
-            st.sidebar.info(f"Ready to train on {len(labeled_data)} labeled kills")
+            st.sidebar.success(f"✅ **Ready to Train!**")
+            st.sidebar.markdown(f"• {len(labeled_data)} labeled kills available")
+            st.sidebar.markdown(f"• Click 'Train Model' to start active learning")
+            
+            # Show current model status
+            if 'active_learning_suggestions' in st.session_state:
+                suggestions = st.session_state['active_learning_suggestions']
+                if 'model_accuracy' in suggestions:
+                    accuracy = suggestions['model_accuracy']
+                    labeled_count = suggestions.get('labeled_count', 0)
+                    current_labeled = len(labeled_data)
+                    total_unlabeled = suggestions.get('total_unlabeled', 0)
+                    error = suggestions.get('error', None)
+                    
+                    # Show model status with color coding
+                    if error:
+                        st.sidebar.error(f"❌ **Model Error:** {error}")
+                    elif current_labeled > labeled_count:
+                        st.sidebar.warning(f"🔄 **Model Outdated!**")
+                        st.sidebar.markdown(f"• {current_labeled - labeled_count} new labels added")
+                        st.sidebar.markdown(f"• Accuracy: {accuracy:.1%} (outdated)")
+                        st.sidebar.markdown(f"• **Auto-retrain will happen when you save labels**")
+                        st.sidebar.markdown(f"• Or click 'Train Model' to update now")
+                    else:
+                        st.sidebar.success(f"🤖 **Model Active**")
+                        st.sidebar.markdown(f"• Accuracy: {accuracy:.1%}")
+                        st.sidebar.markdown(f"• Trained on {labeled_count} labels")
+                        if total_unlabeled > 0:
+                            st.sidebar.markdown(f"• {total_unlabeled} unlabeled kills available")
+                        st.sidebar.markdown(f"• Ready to suggest uncertain kills")
+                        
+                        # Show how uncertainty works
+                        st.sidebar.markdown("**💡 How Uncertainty Works:**")
+                        st.sidebar.markdown("• **High uncertainty** = Model is confused about this kill")
+                        st.sidebar.markdown("• **Low uncertainty** = Model is confident in its prediction")
+                        st.sidebar.markdown("• **Label uncertain kills** to improve the model most")
+                        st.sidebar.markdown("• **After labeling, uncertainty should change**")
+                        
+                        # Add explanation about why uncertainty might not change
+                        st.sidebar.markdown("**⚠️ Why Uncertainty Might Not Change:**")
+                        st.sidebar.markdown("• **Limited features:** Your CSV only has basic features (distance, time, headshot)")
+                        st.sidebar.markdown("• **Similar kills:** Many kills might have similar characteristics")
+                        st.sidebar.markdown("• **Model needs more data:** 119 kills might not be enough variety")
+                        st.sidebar.markdown("• **Feature quality:** Missing enhanced features limits learning")
+                        
+                        st.sidebar.markdown("**💡 To Improve Results:**")
+                        st.sidebar.markdown("• Label more diverse kills (different distances, times, situations)")
+                        st.sidebar.markdown("• Use enhanced data files (with awareness, utility, etc.)")
+                        st.sidebar.markdown("• Try different label combinations")
+                        st.sidebar.markdown("• The model will improve as you add more labeled data")
+                else:
+                    st.sidebar.info("🤖 Model not yet trained")
+            else:
+                st.sidebar.info("🤖 Model not yet trained")
             
             if st.sidebar.button("🔄 Train Model & Generate Suggestions"):
                 try:
-                    # Import here to avoid circular imports
-                    import lightgbm as lgb
-                    from sklearn.model_selection import train_test_split
-                    from sklearn.preprocessing import LabelEncoder
-                    import numpy as np
-                    
-                    # Prepare training data
-                    training_features = []
-                    training_labels = []
-                    
-                    for kill in labeled_data:
-                        # Extract features (you can enhance this)
-                        features = [
-                            kill.get('distance_xy', 0),
-                            kill.get('time_in_round_s', 0),
-                            kill.get('attacker_health', 100),
-                            kill.get('victim_health', 100),
-                            1 if kill.get('headshot', False) else 0,
-                            1 if kill.get('victim_was_aware', False) else 0,
-                            1 if kill.get('had_sound_cue', False) else 0,
-                            kill.get('utility_count', 0),
-                            kill.get('approach_align_deg', 0) or 0,
-                        ]
+                    # Show training status with more detailed progress
+                    with st.sidebar.status("🤖 Training ML Model...", expanded=True) as status:
+                        st.sidebar.write("📊 **Step 1:** Preparing training data...")
                         
-                        # Use attacker labels as target (simplified - you can enhance this)
-                        if 'attacker_labels' in kill and kill['attacker_labels']:
-                            # Take the first label for simplicity
-                            label = kill['attacker_labels'][0]
-                        else:
-                            label = 'other'  # Default label
+                        # Import here to avoid circular imports
+                        try:
+                            import lightgbm as lgb
+                            use_lightgbm = True
+                            st.sidebar.write("✅ Using LightGBM model (faster & more accurate)")
+                        except ImportError:
+                            from sklearn.ensemble import RandomForestClassifier
+                            use_lightgbm = False
+                            st.sidebar.write("⚠️ LightGBM not available, using Random Forest instead")
                         
-                        training_features.append(features)
-                        training_labels.append(label)
+                        from sklearn.model_selection import train_test_split
+                        from sklearn.preprocessing import LabelEncoder
+                        import numpy as np
+                        
+                        st.sidebar.write("🔍 **Step 2:** Extracting features from labeled data...")
+                        
+                        # Prepare training data
+                        training_features = []
+                        training_labels = []
+                    
+                        # SIMPLIFIED FEATURE EXTRACTION - Works with imported CSV data
+                        st.sidebar.write("🔍 **Step 2:** Extracting features from labeled data...")
+                        
+                        # Check what features are available in the data
+                        sample_kill = labeled_data[0] if labeled_data else {}
+                        available_features = []
+                        
+                        # Basic features that should be available
+                        basic_features = ['distance_xy', 'time_in_round_s', 'headshot']
+                        for feature in basic_features:
+                            if feature in sample_kill and sample_kill[feature] is not None:
+                                available_features.append(feature)
+                        
+                        # Enhanced features (optional)
+                        enhanced_features = ['victim_was_aware', 'had_sound_cue', 'utility_count', 'approach_align_deg']
+                        for feature in enhanced_features:
+                            if feature in sample_kill and sample_kill[feature] is not None:
+                                available_features.append(feature)
+                        
+                        st.sidebar.write(f"📋 **Available Features:** {', '.join(available_features)}")
+                        
+                        # Extract features based on what's available
+                        training_features = []
+                        training_labels = []
+                        
+                        for kill in labeled_data:
+                            features = []
+                            
+                            # Always include basic features with fallbacks
+                            features.append(float(kill.get('distance_xy', 0)))
+                            features.append(float(kill.get('time_in_round_s', 0)))
+                            features.append(1 if kill.get('headshot', False) else 0)
+                            
+                            # Add enhanced features if available, otherwise use defaults
+                            if 'victim_was_aware' in available_features:
+                                features.append(1 if kill.get('victim_was_aware', False) else 0)
+                            else:
+                                features.append(0)  # Default: not aware
+                            
+                            if 'had_sound_cue' in available_features:
+                                features.append(1 if kill.get('had_sound_cue', False) else 0)
+                            else:
+                                features.append(0)  # Default: no sound cue
+                            
+                            if 'utility_count' in available_features:
+                                features.append(float(kill.get('utility_count', 0)))
+                            else:
+                                features.append(0)  # Default: no utility
+                            
+                            if 'approach_align_deg' in available_features:
+                                features.append(float(kill.get('approach_align_deg', 0) or 0))
+                            else:
+                                features.append(0)  # Default: no movement
+                            
+                            # Use attacker labels as target
+                            if 'attacker_labels' in kill and kill['attacker_labels']:
+                                label = kill['attacker_labels'][0]
+                            else:
+                                label = 'other'
+                            
+                            training_features.append(features)
+                            training_labels.append(label)
+                        
+                        st.sidebar.write(f"📈 **Step 3:** Training on {len(training_features)} samples...")
+                        st.sidebar.write(f"📋 **Features Used:** {', '.join(available_features)}")
+                        
+                        # Show label distribution
+                        label_counts = {}
+                        for label in training_labels:
+                            label_counts[label] = label_counts.get(label, 0) + 1
+                        st.sidebar.write("📊 **Label Distribution:**")
+                        for label, count in label_counts.items():
+                            st.sidebar.write(f"   - {label}: {count} samples")
+                        
+                        # Show feature availability
+                        st.sidebar.write("🔍 **Feature Availability:**")
+                        for feature in basic_features + enhanced_features:
+                            if feature in available_features:
+                                st.sidebar.write(f"   ✅ {feature}: Available")
+                            else:
+                                st.sidebar.write(f"   ❌ {feature}: Using default value")
                     
                     # Encode labels
                     label_encoder = LabelEncoder()
@@ -858,14 +1199,23 @@ def create_ml_training_controls(filtered_kills: pd.DataFrame, labeled_data: List
                         training_features, encoded_labels, test_size=0.2, random_state=42
                     )
                     
-                    # Train LightGBM model
-                    model = lgb.LGBMClassifier(
-                        n_estimators=100,
-                        learning_rate=0.1,
-                        max_depth=6,
-                        random_state=42,
-                        verbose=-1
-                    )
+                    st.sidebar.write(f"🔄 **Step 4:** Training model ({len(X_train)} train, {len(X_val)} validation)...")
+                    
+                    # Train model (LightGBM or Random Forest)
+                    if use_lightgbm:
+                        model = lgb.LGBMClassifier(
+                            n_estimators=100,
+                            learning_rate=0.1,
+                            max_depth=6,
+                            random_state=42,
+                            verbose=-1
+                        )
+                    else:
+                        model = RandomForestClassifier(
+                            n_estimators=100,
+                            max_depth=6,
+                            random_state=42
+                        )
                     
                     model.fit(X_train, y_train)
                     
@@ -882,61 +1232,125 @@ def create_ml_training_controls(filtered_kills: pd.DataFrame, labeled_data: List
                         )
                         
                         if not is_labeled:
-                            # Extract features for unlabeled kill
-                            features = [
-                                kill_row.get('distance_xy', 0),
-                                kill_row.get('time_in_round_s', 0),
-                                kill_row.get('attacker_health', 100),
-                                kill_row.get('victim_health', 100),
-                                1 if kill_row.get('headshot', False) else 0,
-                                1 if kill_row.get('victim_was_aware', False) else 0,
-                                1 if kill_row.get('had_sound_cue', False) else 0,
-                                kill_row.get('utility_count', 0),
-                                kill_row.get('approach_align_deg', 0) or 0,
-                            ]
+                            # Extract features for unlabeled kill (same logic as training)
+                            features = []
+                            
+                            # Always include basic features with fallbacks
+                            features.append(float(kill_row.get('distance_xy', 0)))
+                            features.append(float(kill_row.get('time_in_round_s', 0)))
+                            features.append(1 if kill_row.get('headshot', False) else 0)
+                            
+                            # Add enhanced features if available, otherwise use defaults
+                            if 'victim_was_aware' in available_features:
+                                features.append(1 if kill_row.get('victim_was_aware', False) else 0)
+                            else:
+                                features.append(0)  # Default: not aware
+                            
+                            if 'had_sound_cue' in available_features:
+                                features.append(1 if kill_row.get('had_sound_cue', False) else 0)
+                            else:
+                                features.append(0)  # Default: no sound cue
+                            
+                            if 'utility_count' in available_features:
+                                features.append(float(kill_row.get('utility_count', 0)))
+                            else:
+                                features.append(0)  # Default: no utility
+                            
+                            if 'approach_align_deg' in available_features:
+                                features.append(float(kill_row.get('approach_align_deg', 0) or 0))
+                            else:
+                                features.append(0)  # Default: no movement
                             
                             unlabeled_features.append(features)
                             unlabeled_indices.append(idx)
                     
                     if unlabeled_features:
-                        # Get prediction probabilities
-                        probabilities = model.predict_proba(unlabeled_features)
+                        try:
+                            # Get prediction probabilities
+                            probabilities = model.predict_proba(unlabeled_features)
+                            
+                            # Calculate uncertainty (entropy)
+                            uncertainties = []
+                            for prob in probabilities:
+                                # Add small epsilon to avoid log(0)
+                                prob_safe = prob + 1e-10
+                                prob_safe = prob_safe / prob_safe.sum()  # Renormalize
+                                # Use log2 for entropy calculation (more standard)
+                                entropy = -np.sum(prob_safe * np.log2(prob_safe + 1e-10))
+                                uncertainties.append(entropy)
+                            
+                            # Sort by uncertainty (highest first)
+                            uncertainty_data = list(zip(unlabeled_indices, uncertainties))
+                            uncertainty_data.sort(key=lambda x: x[1], reverse=True)
+                            
+                            # Calculate accuracy on validation set
+                            val_accuracy = model.score(X_val, y_val)
+                            
+                            # Store suggestions in session state
+                            st.session_state['active_learning_suggestions'] = {
+                                'suggested_indices': [idx for idx, _ in uncertainty_data[:ml_controls['active_learning']['sample_size']]],
+                                'uncertainties': [unc for _, unc in uncertainty_data[:ml_controls['active_learning']['sample_size']]],
+                                'model_accuracy': val_accuracy,
+                                'labeled_count': len(labeled_data),
+                                'total_unlabeled': len(unlabeled_features)
+                            }
+                            
+                            st.sidebar.write(f"✅ **Successfully calculated uncertainties for {len(unlabeled_features)} unlabeled kills**")
+                            st.sidebar.write(f"🎯 **Top 3 Uncertain Kills:**")
+                            for i, (idx, uncertainty) in enumerate(uncertainty_data[:3]):
+                                kill_row = filtered_kills.iloc[idx]
+                                st.sidebar.write(f"   {i+1}. {kill_row.get('attacker_name', 'Unknown')} → {kill_row.get('victim_name', 'Unknown')}")
+                                st.sidebar.write(f"      Uncertainty: {uncertainty:.3f}")
+                            
+                            st.sidebar.write(f"📊 **Uncertainty Range:** {min(uncertainties):.3f} - {max(uncertainties):.3f}")
+                        except Exception as e:
+                            st.sidebar.error(f"❌ **Error calculating uncertainties:** {str(e)}")
+                            st.sidebar.write("🔍 **Debug Info:**")
+                            st.sidebar.write(f"   - Unlabeled features shape: {len(unlabeled_features)} samples")
+                            if unlabeled_features:
+                                st.sidebar.write(f"   - Feature vector length: {len(unlabeled_features[0])}")
+                                st.sidebar.write(f"   - Sample features: {unlabeled_features[0]}")
+                            
+                            # Still store model info
+                            val_accuracy = model.score(X_val, y_val)
+                            st.session_state['active_learning_suggestions'] = {
+                                'model_accuracy': val_accuracy,
+                                'labeled_count': len(labeled_data),
+                                'error': str(e)
+                            }
                         
-                        # Calculate uncertainty (entropy)
-                        uncertainties = []
-                        for prob in probabilities:
-                            # Calculate entropy: -sum(p * log(p))
-                            entropy = -np.sum(prob * np.log(prob + 1e-10))
-                            uncertainties.append(entropy)
-                        
-                        # Sort by uncertainty (highest first)
-                        uncertainty_data = list(zip(unlabeled_indices, uncertainties))
-                        uncertainty_data.sort(key=lambda x: x[1], reverse=True)
-                        
-                        # Calculate accuracy on validation set
-                        val_accuracy = model.score(X_val, y_val)
-                        
-                        # Store suggestions in session state
-                        st.session_state['active_learning_suggestions'] = {
-                            'suggested_indices': [idx for idx, _ in uncertainty_data[:ml_controls['active_learning']['sample_size']]],
-                            'uncertainties': [unc for _, unc in uncertainty_data[:ml_controls['active_learning']['sample_size']]],
-                            'model_accuracy': val_accuracy
-                        }
-                        
-                        st.sidebar.success(f"✅ Model trained! Accuracy: {val_accuracy:.2f}")
-                        st.sidebar.info(f"📊 Found {len(unlabeled_features)} unlabeled kills")
-                        st.sidebar.info(f"🎯 Top {ml_controls['active_learning']['sample_size']} uncertain samples ready")
+                        st.sidebar.write("🎯 **Step 5:** Calculating uncertainty scores...")
                         
                         # Show top suggestions
-                        st.sidebar.markdown("**Top Uncertain Kills:**")
+                        st.sidebar.markdown("**🎯 Top Uncertain Kills (Prioritize These):**")
                         for i, (idx, uncertainty) in enumerate(uncertainty_data[:5]):
                             kill_row = filtered_kills.iloc[idx]
-                            st.sidebar.markdown(f"{i+1}. **{kill_row.get('attacker_name', 'Unknown')}** → **{kill_row.get('victim_name', 'Unknown')}** (uncertainty: {uncertainty:.3f})")
+                            st.sidebar.markdown(f"{i+1}. **{kill_row.get('attacker_name', 'Unknown')}** → **{kill_row.get('victim_name', 'Unknown')}**")
+                            st.sidebar.markdown(f"   Uncertainty: {uncertainty:.3f} (Higher = More Uncertain)")
+                        
+                        status.update(label=f"✅ Model Trained Successfully!", state="complete")
+                        st.sidebar.success(f"🎉 **Training Complete!**")
+                        st.sidebar.success(f"📊 **Model Accuracy:** {val_accuracy:.1%}")
+                        st.sidebar.info(f"📈 **Training Data:** {len(training_features)} labeled kills")
+                        st.sidebar.info(f"🎯 **Unlabeled Kills:** {len(unlabeled_features)} available")
+                        st.sidebar.info(f"🔍 **Top Uncertain:** {ml_controls['active_learning']['sample_size']} kills prioritized")
+                        
+                        # Show what the model learned
+                        st.sidebar.markdown("**🧠 What the Model Learned:**")
+                        st.sidebar.markdown(f"• Trained on {len(label_counts)} different label types")
+                        st.sidebar.markdown(f"• Uses {len(training_features[0])} features per kill")
+                        st.sidebar.markdown(f"• Validation accuracy: {val_accuracy:.1%}")
+                        if use_lightgbm:
+                            st.sidebar.markdown("• Using LightGBM (gradient boosting)")
+                        else:
+                            st.sidebar.markdown("• Using Random Forest (ensemble)")
                     
                     else:
+                        status.update(label="⚠️ No unlabeled kills found!", state="error")
                         st.sidebar.warning("No unlabeled kills found!")
                         
                 except Exception as e:
+                    status.update(label=f"❌ Training failed: {str(e)}", state="error")
                     st.sidebar.error(f"Error training model: {str(e)}")
                     st.sidebar.info("Make sure you have enough labeled data with consistent features")
     
@@ -1005,6 +1419,215 @@ def create_ml_training_controls(filtered_kills: pd.DataFrame, labeled_data: List
     return ml_controls
 
 
+def auto_retrain_model(labeled_data: List[Dict], filtered_kills: pd.DataFrame = None) -> None:
+    """
+    Automatically retrain the model with current labeled data.
+    
+    Args:
+        labeled_data: List of labeled kills
+        filtered_kills: DataFrame with filtered kills (optional, for uncertainty calculation)
+    """
+    if len(labeled_data) < 10:
+        return  # Not enough data
+    
+    try:
+        # Import here to avoid circular imports
+        try:
+            import lightgbm as lgb
+            use_lightgbm = True
+        except ImportError:
+            from sklearn.ensemble import RandomForestClassifier
+            use_lightgbm = False
+        
+        from sklearn.model_selection import train_test_split
+        from sklearn.preprocessing import LabelEncoder
+        import numpy as np
+        
+        # Prepare training data
+        training_features = []
+        training_labels = []
+        
+        # Check what features are available in the data
+        sample_kill = labeled_data[0] if labeled_data else {}
+        available_features = []
+        
+        # Basic features that should be available
+        basic_features = ['distance_xy', 'time_in_round_s', 'headshot']
+        for feature in basic_features:
+            if feature in sample_kill and sample_kill[feature] is not None:
+                available_features.append(feature)
+        
+        # Enhanced features (optional)
+        enhanced_features = ['victim_was_aware', 'had_sound_cue', 'utility_count', 'approach_align_deg']
+        for feature in enhanced_features:
+            if feature in sample_kill and sample_kill[feature] is not None:
+                available_features.append(feature)
+        
+        for kill in labeled_data:
+            features = []
+            
+            # Always include basic features with fallbacks
+            features.append(float(kill.get('distance_xy', 0)))
+            features.append(float(kill.get('time_in_round_s', 0)))
+            features.append(1 if kill.get('headshot', False) else 0)
+            
+            # Add enhanced features if available, otherwise use defaults
+            if 'victim_was_aware' in available_features:
+                features.append(1 if kill.get('victim_was_aware', False) else 0)
+            else:
+                features.append(0)  # Default: not aware
+            
+            if 'had_sound_cue' in available_features:
+                features.append(1 if kill.get('had_sound_cue', False) else 0)
+            else:
+                features.append(0)  # Default: no sound cue
+            
+            if 'utility_count' in available_features:
+                features.append(float(kill.get('utility_count', 0)))
+            else:
+                features.append(0)  # Default: no utility
+            
+            if 'approach_align_deg' in available_features:
+                features.append(float(kill.get('approach_align_deg', 0) or 0))
+            else:
+                features.append(0)  # Default: no movement
+            
+            # Use attacker labels as target
+            if 'attacker_labels' in kill and kill['attacker_labels']:
+                label = kill['attacker_labels'][0]
+            else:
+                label = 'other'
+            
+            training_features.append(features)
+            training_labels.append(label)
+        
+        # Encode labels
+        label_encoder = LabelEncoder()
+        encoded_labels = label_encoder.fit_transform(training_labels)
+        
+        # Split data
+        X_train, X_val, y_train, y_val = train_test_split(
+            training_features, encoded_labels, test_size=0.2, random_state=42
+        )
+        
+        # Train model
+        if use_lightgbm:
+            model = lgb.LGBMClassifier(
+                n_estimators=100,
+                learning_rate=0.1,
+                max_depth=6,
+                random_state=42,
+                verbose=-1
+            )
+        else:
+            model = RandomForestClassifier(
+                n_estimators=100,
+                max_depth=6,
+                random_state=42
+            )
+        
+        model.fit(X_train, y_train)
+        
+        # Calculate accuracy
+        val_accuracy = model.score(X_val, y_val)
+        
+        # If we have filtered_kills, calculate new uncertainties
+        if filtered_kills is not None and not filtered_kills.empty:
+            unlabeled_features = []
+            unlabeled_indices = []
+            
+            for idx, kill_row in filtered_kills.iterrows():
+                # Check if this kill is already labeled by comparing key attributes
+                is_labeled = any(
+                    (labeled_kill.get('tick') == kill_row.get('tick') and 
+                     labeled_kill.get('attacker_name') == kill_row.get('attacker_name') and
+                     labeled_kill.get('victim_name') == kill_row.get('victim_name'))
+                    for labeled_kill in labeled_data
+                )
+                
+                if not is_labeled:
+                    # Extract features for unlabeled kill (same logic as training)
+                    features = []
+                    
+                    # Always include basic features with fallbacks
+                    features.append(float(kill_row.get('distance_xy', 0)))
+                    features.append(float(kill_row.get('time_in_round_s', 0)))
+                    features.append(1 if kill_row.get('headshot', False) else 0)
+                    
+                    # Add enhanced features if available, otherwise use defaults
+                    if 'victim_was_aware' in available_features:
+                        features.append(1 if kill_row.get('victim_was_aware', False) else 0)
+                    else:
+                        features.append(0)  # Default: not aware
+                    
+                    if 'had_sound_cue' in available_features:
+                        features.append(1 if kill_row.get('had_sound_cue', False) else 0)
+                    else:
+                        features.append(0)  # Default: no sound cue
+                    
+                    if 'utility_count' in available_features:
+                        features.append(float(kill_row.get('utility_count', 0)))
+                    else:
+                        features.append(0)  # Default: no utility
+                    
+                    if 'approach_align_deg' in available_features:
+                        features.append(float(kill_row.get('approach_align_deg', 0) or 0))
+                    else:
+                        features.append(0)  # Default: no movement
+                    
+                    unlabeled_features.append(features)
+                    unlabeled_indices.append(idx)
+            
+            if unlabeled_features:
+                try:
+                    # Get prediction probabilities
+                    probabilities = model.predict_proba(unlabeled_features)
+                    
+                    # Calculate uncertainty (entropy)
+                    uncertainties = []
+                    for prob in probabilities:
+                        # Add small epsilon to avoid log(0)
+                        prob_safe = prob + 1e-10
+                        prob_safe = prob_safe / prob_safe.sum()  # Renormalize
+                        # Use log2 for entropy calculation (more standard)
+                        entropy = -np.sum(prob_safe * np.log2(prob_safe + 1e-10))
+                        uncertainties.append(entropy)
+                    
+                    # Sort by uncertainty (highest first)
+                    uncertainty_data = list(zip(unlabeled_indices, uncertainties))
+                    uncertainty_data.sort(key=lambda x: x[1], reverse=True)
+                    
+                    # Update session state with new suggestions
+                    st.session_state['active_learning_suggestions'] = {
+                        'suggested_indices': [idx for idx, _ in uncertainty_data[:10]],  # Default to 10
+                        'uncertainties': [unc for _, unc in uncertainty_data[:10]],
+                        'model_accuracy': val_accuracy,
+                        'labeled_count': len(labeled_data),
+                        'total_unlabeled': len(unlabeled_features)
+                    }
+                except Exception as e:
+                    # If prediction fails, still update model info
+                    st.session_state['active_learning_suggestions'] = {
+                        'model_accuracy': val_accuracy,
+                        'labeled_count': len(labeled_data),
+                        'error': str(e)
+                    }
+        
+        # Store model info even without filtered_kills
+        if 'active_learning_suggestions' not in st.session_state:
+            st.session_state['active_learning_suggestions'] = {
+                'model_accuracy': val_accuracy,
+                'labeled_count': len(labeled_data)
+            }
+        else:
+            st.session_state['active_learning_suggestions']['model_accuracy'] = val_accuracy
+            st.session_state['active_learning_suggestions']['labeled_count'] = len(labeled_data)
+            
+    except Exception as e:
+        # Silently fail for auto-retrain to avoid disrupting the UI
+        pass
+
+
 def display_enhanced_kill_info(kill_context: Dict) -> None:
     """
     Display enhanced kill information with additional context.
@@ -1013,6 +1636,25 @@ def display_enhanced_kill_info(kill_context: Dict) -> None:
         kill_context: Enhanced kill context dictionary
     """
     st.subheader("🎯 Enhanced Kill Analysis")
+    
+    # Match and Round Information
+    if kill_context.get('round_number') is not None:
+        st.markdown("**🎮 Match & Round Info**")
+        col_match, col_round = st.columns(2)
+        
+        with col_match:
+            team1 = kill_context.get('team1_name', 'Team 1')
+            team2 = kill_context.get('team2_name', 'Team 2')
+            score_t = kill_context.get('match_score_t', 0)
+            score_ct = kill_context.get('match_score_ct', 0)
+            st.write(f"**Match Score:** {team1} {score_t} - {score_ct} {team2}")
+        
+        with col_round:
+            round_num = kill_context.get('round_number', 0)
+            round_phase = kill_context.get('round_phase', 'unknown')
+            st.write(f"**Round:** {round_num} ({round_phase})")
+            if 'bomb_planted' in kill_context and kill_context['bomb_planted']:
+                st.write(f"**Bomb Planted:** Yes ({kill_context.get('time_since_bomb_plant', 0):.1f}s ago)")
     
     # Basic info
     col1, col2 = st.columns(2)
@@ -1025,13 +1667,29 @@ def display_enhanced_kill_info(kill_context: Dict) -> None:
         st.write(f"**Headshot:** {'Yes' if kill_context['headshot'] else 'No'}")
         st.write(f"**Time in Round:** {kill_context['time_in_round_s']:.1f}s")
         
-        # Round context
-        if 'round_number' in kill_context and kill_context['round_number'] is not None:
-            st.write(f"**Round:** {kill_context['round_number']}")
-        if 'round_phase' in kill_context:
-            st.write(f"**Phase:** {kill_context['round_phase']}")
-        if 'bomb_planted' in kill_context and kill_context['bomb_planted']:
-            st.write(f"**Bomb Planted:** Yes ({kill_context.get('time_since_bomb_plant', 0):.1f}s ago)")
+        # Weapon information
+        st.markdown("**Weapons:**")
+        attacker_weapon = kill_context.get('attacker_weapon', 'Unknown')
+        victim_weapon = kill_context.get('victim_weapon', 'Unknown')
+        st.write(f"**Attacker Weapon:** {attacker_weapon}")
+        st.write(f"**Victim Weapon:** {victim_weapon}")
+        
+        # Equipment advantage analysis
+        if attacker_weapon != 'Unknown' and victim_weapon != 'Unknown':
+            st.markdown("**Equipment Analysis:**")
+            # Simple weapon tier analysis
+            primary_weapons = ['ak47', 'm4a1', 'awp', 'sg553', 'aug', 'famas', 'galil']
+            secondary_weapons = ['deagle', 'usp', 'glock', 'p250', 'tec9', 'cz75']
+            
+            attacker_has_primary = any(weapon in attacker_weapon.lower() for weapon in primary_weapons)
+            victim_has_primary = any(weapon in victim_weapon.lower() for weapon in primary_weapons)
+            
+            if attacker_has_primary and not victim_has_primary:
+                st.write("✅ Attacker has equipment advantage")
+            elif not attacker_has_primary and victim_has_primary:
+                st.write("❌ Attacker has equipment disadvantage")
+            else:
+                st.write("⚖️ Equipment is balanced")
     
     with col2:
         st.markdown("**Player States:**")
@@ -1041,6 +1699,21 @@ def display_enhanced_kill_info(kill_context: Dict) -> None:
         st.write(f"**Victim Moving:** {'Yes' if kill_context.get('victim_is_moving', False) else 'No'}")
         st.write(f"**Attacker Ducking:** {'Yes' if kill_context.get('attacker_is_ducking', False) else 'No'}")
         st.write(f"**Victim Ducking:** {'Yes' if kill_context.get('victim_is_ducking', False) else 'No'}")
+        
+        # Approach alignment with interpretation
+        approach_align = kill_context.get('approach_align_deg')
+        if approach_align is not None:
+            st.write(f"**Approach Alignment:** {approach_align:.1f}°")
+            if approach_align < 30:
+                st.write("🎯 Excellent alignment")
+            elif approach_align < 60:
+                st.write("✅ Good alignment")
+            elif approach_align < 90:
+                st.write("⚠️ Fair alignment")
+            else:
+                st.write("❌ Poor alignment")
+        else:
+            st.write("**Approach Alignment:** Not moving")
     
     # Sound cues
     if 'had_sound_cue' in kill_context:

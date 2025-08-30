@@ -198,6 +198,23 @@ def enhance_rounds_data(rounds_df: pd.DataFrame) -> pd.DataFrame:
     
     enhanced = rounds_df.copy()
     
+    # Map AWPy column names to expected names
+    column_mapping = {
+        'start': 'start_tick',
+        'end': 'end_tick', 
+        'official_end': 'official_end_tick',
+        'round_num': 'round',
+        'winner': 'winner',
+        'reason': 'round_winner_reason',
+        'bomb_plant': 'bomb_plant_tick',
+        'bomb_site': 'bomb_site'
+    }
+    
+    # Rename columns that exist
+    for old_name, new_name in column_mapping.items():
+        if old_name in enhanced.columns:
+            enhanced = enhanced.rename(columns={old_name: new_name})
+    
     # Add round phase information
     enhanced['round_phase'] = 'unknown'
     

@@ -21,7 +21,8 @@ from streamlit_app.components import (
     create_filters, apply_filters, create_label_controls, create_map_figure,
     display_kill_info, create_navigation_controls, display_labeled_summary,
     create_export_button, create_file_uploaders, create_map_settings,
-    create_batch_labeling_controls, create_ml_training_controls, create_labeled_data_importer
+    create_batch_labeling_controls, create_ml_training_controls, create_labeled_data_importer,
+    auto_retrain_model
 )
 from streamlit_app.transforms import (
     load_map_data, get_enhanced_kill_context
@@ -110,7 +111,8 @@ def get_active_learning_status(current_index: int, total_kills: int) -> Tuple[bo
             if current_index in suggestions['suggested_indices']:
                 uncertainty_idx = suggestions['suggested_indices'].index(current_index)
                 uncertainty = suggestions['uncertainties'][uncertainty_idx]
-                return True, f'🎯 **ACTIVE LEARNING** - Kill {current_index + 1} of {total_kills} (Uncertainty: {uncertainty:.3f})'
+                accuracy = suggestions.get('model_accuracy', 0)
+                return True, f'🎯 **ACTIVE LEARNING** - Kill {current_index + 1} of {total_kills} (Uncertainty: {uncertainty:.3f}, Model Acc: {accuracy:.2f})'
     
     return False, f'Kill {current_index + 1} of {total_kills}'
 
@@ -147,6 +149,38 @@ def save_labeled_kill(kill_context: Dict, attacker_labels: List[str], victim_lab
         # Add new label
         st.session_state.labeled_data.append(labeled_kill)
         st.success("Label saved!")
+    
+    # Auto-retrain model if active learning is enabled and we have enough data
+    if ('active_learning_suggestions' in st.session_state and 
+        len(st.session_state.labeled_data) >= 10 and
+        st.session_state.get('ml_mode', False)):
+        
+        # Check if we need to retrain (new labels added)
+        current_labeled_count = len(st.session_state.labeled_data)
+        stored_labeled_count = st.session_state['active_learning_suggestions'].get('labeled_count', 0)
+        
+        if current_labeled_count > stored_labeled_count:
+            # Auto-retrain the model
+            try:
+                # Get filtered_kills from session state if available
+                filtered_kills = st.session_state.get('filtered_kills')
+                auto_retrain_model(st.session_state.labeled_data, filtered_kills)
+                st.success("🤖 **Auto-Training Complete!**")
+                st.info(f"📊 Model updated: {stored_labeled_count} → {current_labeled_count} labeled kills")
+                st.info("🎯 Uncertainty scores recalculated - check sidebar for new suggestions!")
+            except Exception as e:
+                st.warning(f"Auto-retrain failed: {str(e)}")
+        else:
+            # Debug info
+            st.info(f"🔍 Auto-retrain check: {current_labeled_count} current vs {stored_labeled_count} stored labels")
+    else:
+        # Debug info for why auto-retrain isn't working
+        if 'active_learning_suggestions' not in st.session_state:
+            st.info("🔍 Auto-retrain: No active learning suggestions found")
+        elif len(st.session_state.labeled_data) < 10:
+            st.info(f"🔍 Auto-retrain: Only {len(st.session_state.labeled_data)} labeled kills (need 10+)")
+        elif not st.session_state.get('ml_mode', False):
+            st.info("🔍 Auto-retrain: Not in ML Training Mode")
 
 
 def save_batch_labels(batch_labels: Dict, kill_contexts: List[Dict]) -> None:
@@ -205,25 +239,25 @@ def main():
         st.session_state.ml_mode = False
     
     # File uploads
-    kills_df, ticks_df, grenades_df = create_file_uploaders()
+    kills_df, ticks_df, grenades_df, damages_df, shots_df, smokes_df, infernos_df, bomb_df, rounds_df = create_file_uploaders()
     
     # Import existing labeled data
     create_labeled_data_importer()
     
-    # Enhanced file uploads for ML mode
-    damages_df = None
-    shots_df = None
-    smokes_df = None
-    infernos_df = None
-    bomb_df = None
-    
-    if st.session_state.ml_mode:
-        st.sidebar.markdown("### Enhanced Data Files (ML Mode)")
-        damages_df = st.sidebar.file_uploader("Damage Events (damages.parquet)", type=['parquet'])
-        shots_df = st.sidebar.file_uploader("Shot Events (shots.parquet)", type=['parquet'])
-        smokes_df = st.sidebar.file_uploader("Smoke Events (smokes.parquet)", type=['parquet'])
-        infernos_df = st.sidebar.file_uploader("Molotov Events (infernos.parquet)", type=['parquet'])
-        bomb_df = st.sidebar.file_uploader("Bomb Events (bomb.parquet)", type=['parquet'])
+    # Enhanced file uploads for ML mode (only if not already loaded via bulk upload)
+    if st.session_state.ml_mode and (damages_df is None or shots_df is None or smokes_df is None or infernos_df is None or bomb_df is None):
+        st.sidebar.markdown("### Additional Data Files (ML Mode)")
+        
+        if damages_df is None:
+            damages_df = st.sidebar.file_uploader("Damage Events (damages.parquet)", type=['parquet'])
+        if shots_df is None:
+            shots_df = st.sidebar.file_uploader("Shot Events (shots.parquet)", type=['parquet'])
+        if smokes_df is None:
+            smokes_df = st.sidebar.file_uploader("Smoke Events (smokes.parquet)", type=['parquet'])
+        if infernos_df is None:
+            infernos_df = st.sidebar.file_uploader("Molotov Events (infernos.parquet)", type=['parquet'])
+        if bomb_df is None:
+            bomb_df = st.sidebar.file_uploader("Bomb Events (bomb.parquet)", type=['parquet'])
     
     # Check if required files are loaded
     if kills_df is None or ticks_df is None:
@@ -272,22 +306,11 @@ def main():
         return
     
     # Load additional data for enhanced context
-    damages_df_loaded = None
-    shots_df_loaded = None
-    smokes_df_loaded = None
-    infernos_df_loaded = None
-    bomb_df_loaded = None
-    
-    if damages_df is not None:
-        damages_df_loaded = pd.read_parquet(damages_df)
-    if shots_df is not None:
-        shots_df_loaded = pd.read_parquet(shots_df)
-    if smokes_df is not None:
-        smokes_df_loaded = pd.read_parquet(smokes_df)
-    if infernos_df is not None:
-        infernos_df_loaded = pd.read_parquet(infernos_df)
-    if bomb_df is not None:
-        bomb_df_loaded = pd.read_parquet(bomb_df)
+    damages_df_loaded = damages_df if damages_df is not None else pd.DataFrame()
+    shots_df_loaded = shots_df if shots_df is not None else pd.DataFrame()
+    smokes_df_loaded = smokes_df if smokes_df is not None else pd.DataFrame()
+    infernos_df_loaded = infernos_df if infernos_df is not None else pd.DataFrame()
+    bomb_df_loaded = bomb_df if bomb_df is not None else pd.DataFrame()
     
     # Main content area
     if st.session_state.batch_mode:
@@ -308,26 +331,27 @@ def main():
         # Generate kill contexts for batch
         kill_contexts = []
         
-        # Estimate round data from ticks if available
-        rounds_df = pd.DataFrame()
-        if not ticks_df.empty and 'tick' in ticks_df.columns:
-            # Estimate round boundaries from tick data
-            min_tick = ticks_df['tick'].min()
-            max_tick = ticks_df['tick'].max()
-            # Assume rounds are ~3000 ticks each
-            round_duration = 3000
-            estimated_rounds = []
-            for round_num in range(1, 31):  # Max 30 rounds
-                start_tick = min_tick + (round_num - 1) * round_duration
-                end_tick = min_tick + round_num * round_duration
-                if start_tick <= max_tick:
-                    estimated_rounds.append({
-                        'round': round_num,
-                        'start_tick': start_tick,
-                        'end_tick': end_tick
-                    })
-            if estimated_rounds:
-                rounds_df = pd.DataFrame(estimated_rounds)
+        # Use uploaded rounds data if available, otherwise estimate from ticks
+        if rounds_df is None or rounds_df.empty:
+            rounds_df = pd.DataFrame()
+            if not ticks_df.empty and 'tick' in ticks_df.columns:
+                # Estimate round boundaries from tick data
+                min_tick = ticks_df['tick'].min()
+                max_tick = ticks_df['tick'].max()
+                # Assume rounds are ~3000 ticks each
+                round_duration = 3000
+                estimated_rounds = []
+                for round_num in range(1, 31):  # Max 30 rounds
+                    start_tick = min_tick + (round_num - 1) * round_duration
+                    end_tick = min_tick + round_num * round_duration
+                    if start_tick <= max_tick:
+                        estimated_rounds.append({
+                            'round': round_num,
+                            'start_tick': start_tick,
+                            'end_tick': end_tick
+                        })
+                if estimated_rounds:
+                    rounds_df = pd.DataFrame(estimated_rounds)
         
         for _, kill_row in batch_kills.iterrows():
             if st.session_state.ml_mode:
@@ -387,26 +411,27 @@ def main():
             current_kill = filtered_kills.iloc[current_index]
             
             # Get enhanced kill context
-            # Try to estimate round data from ticks if available
-            rounds_df = pd.DataFrame()
-            if not ticks_df.empty and 'tick' in ticks_df.columns:
-                # Estimate round boundaries from tick data
-                min_tick = ticks_df['tick'].min()
-                max_tick = ticks_df['tick'].max()
-                # Assume rounds are ~3000 ticks each
-                round_duration = 3000
-                estimated_rounds = []
-                for round_num in range(1, 31):  # Max 30 rounds
-                    start_tick = min_tick + (round_num - 1) * round_duration
-                    end_tick = min_tick + round_num * round_duration
-                    if start_tick <= max_tick:
-                        estimated_rounds.append({
-                            'round': round_num,
-                            'start_tick': start_tick,
-                            'end_tick': end_tick
-                        })
-                if estimated_rounds:
-                    rounds_df = pd.DataFrame(estimated_rounds)
+            # Use uploaded rounds data if available, otherwise estimate from ticks
+            if rounds_df is None or rounds_df.empty:
+                rounds_df = pd.DataFrame()
+                if not ticks_df.empty and 'tick' in ticks_df.columns:
+                    # Estimate round boundaries from tick data
+                    min_tick = ticks_df['tick'].min()
+                    max_tick = ticks_df['tick'].max()
+                    # Assume rounds are ~3000 ticks each
+                    round_duration = 3000
+                    estimated_rounds = []
+                    for round_num in range(1, 31):  # Max 30 rounds
+                        start_tick = min_tick + (round_num - 1) * round_duration
+                        end_tick = min_tick + round_num * round_duration
+                        if start_tick <= max_tick:
+                            estimated_rounds.append({
+                                'round': round_num,
+                                'start_tick': start_tick,
+                                'end_tick': end_tick
+                            })
+                    if estimated_rounds:
+                        rounds_df = pd.DataFrame(estimated_rounds)
             
             kill_context = get_enhanced_kill_context(
                 current_kill, ticks_df, rounds_df, grenades_df if grenades_df is not None else pd.DataFrame(),
@@ -457,12 +482,22 @@ def main():
             if is_active_learning and 'active_learning_suggestions' in st.session_state:
                 suggestions = st.session_state['active_learning_suggestions']
                 if suggestions and 'suggested_indices' in suggestions:
-                    current_suggestion_idx = suggestions['suggested_indices'].index(current_index)
-                    if current_suggestion_idx < len(suggestions['suggested_indices']) - 1:
-                        next_uncertain_idx = suggestions['suggested_indices'][current_suggestion_idx + 1]
-                        if st.button("🎯 Next Uncertain Kill", type="secondary"):
-                            st.session_state.current_kill_index = next_uncertain_idx
-                            st.rerun()
+                    # Find the next uncertain kill
+                    suggested_indices = suggestions['suggested_indices']
+                    if current_index in suggested_indices:
+                        current_suggestion_idx = suggested_indices.index(current_index)
+                        if current_suggestion_idx < len(suggested_indices) - 1:
+                            next_uncertain_idx = suggested_indices[current_suggestion_idx + 1]
+                            if st.button("🎯 Next Uncertain Kill", type="secondary"):
+                                st.session_state.current_kill_index = next_uncertain_idx
+                                st.rerun()
+                    else:
+                        # Current kill is not in suggestions, go to first suggestion
+                        if suggested_indices:
+                            next_uncertain_idx = suggested_indices[0]
+                            if st.button("🎯 Go to Uncertain Kill", type="secondary"):
+                                st.session_state.current_kill_index = next_uncertain_idx
+                                st.rerun()
             
             # Navigation controls
             new_index = create_navigation_controls(total_kills, current_index)
@@ -490,26 +525,27 @@ def main():
             current_kill = filtered_kills.iloc[current_index]
             
             # Get kill context
-            # Try to estimate round data from ticks if available
-            rounds_df = pd.DataFrame()
-            if not ticks_df.empty and 'tick' in ticks_df.columns:
-                # Estimate round boundaries from tick data
-                min_tick = ticks_df['tick'].min()
-                max_tick = ticks_df['tick'].max()
-                # Assume rounds are ~3000 ticks each
-                round_duration = 3000
-                estimated_rounds = []
-                for round_num in range(1, 31):  # Max 30 rounds
-                    start_tick = min_tick + (round_num - 1) * round_duration
-                    end_tick = min_tick + round_num * round_duration
-                    if start_tick <= max_tick:
-                        estimated_rounds.append({
-                            'round': round_num,
-                            'start_tick': start_tick,
-                            'end_tick': end_tick
-                        })
-                if estimated_rounds:
-                    rounds_df = pd.DataFrame(estimated_rounds)
+            # Use uploaded rounds data if available, otherwise estimate from ticks
+            if rounds_df is None or rounds_df.empty:
+                rounds_df = pd.DataFrame()
+                if not ticks_df.empty and 'tick' in ticks_df.columns:
+                    # Estimate round boundaries from tick data
+                    min_tick = ticks_df['tick'].min()
+                    max_tick = ticks_df['tick'].max()
+                    # Assume rounds are ~3000 ticks each
+                    round_duration = 3000
+                    estimated_rounds = []
+                    for round_num in range(1, 31):  # Max 30 rounds
+                        start_tick = min_tick + (round_num - 1) * round_duration
+                        end_tick = min_tick + round_num * round_duration
+                        if start_tick <= max_tick:
+                            estimated_rounds.append({
+                                'round': round_num,
+                                'start_tick': start_tick,
+                                'end_tick': end_tick
+                            })
+                    if estimated_rounds:
+                        rounds_df = pd.DataFrame(estimated_rounds)
             
             kill_context = get_enhanced_kill_context(
                 current_kill, ticks_df, rounds_df, grenades_df if grenades_df is not None else pd.DataFrame(),
@@ -556,12 +592,22 @@ def main():
             if is_active_learning and 'active_learning_suggestions' in st.session_state:
                 suggestions = st.session_state['active_learning_suggestions']
                 if suggestions and 'suggested_indices' in suggestions:
-                    current_suggestion_idx = suggestions['suggested_indices'].index(current_index)
-                    if current_suggestion_idx < len(suggestions['suggested_indices']) - 1:
-                        next_uncertain_idx = suggestions['suggested_indices'][current_suggestion_idx + 1]
-                        if st.button("🎯 Next Uncertain Kill", type="secondary"):
-                            st.session_state.current_kill_index = next_uncertain_idx
-                            st.rerun()
+                    # Find the next uncertain kill
+                    suggested_indices = suggestions['suggested_indices']
+                    if current_index in suggested_indices:
+                        current_suggestion_idx = suggested_indices.index(current_index)
+                        if current_suggestion_idx < len(suggested_indices) - 1:
+                            next_uncertain_idx = suggested_indices[current_suggestion_idx + 1]
+                            if st.button("🎯 Next Uncertain Kill", type="secondary"):
+                                st.session_state.current_kill_index = next_uncertain_idx
+                                st.rerun()
+                    else:
+                        # Current kill is not in suggestions, go to first suggestion
+                        if suggested_indices:
+                            next_uncertain_idx = suggested_indices[0]
+                            if st.button("🎯 Go to Uncertain Kill", type="secondary"):
+                                st.session_state.current_kill_index = next_uncertain_idx
+                                st.rerun()
             
             # Navigation controls
             new_index = create_navigation_controls(total_kills, current_index)
