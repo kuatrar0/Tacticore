@@ -8,6 +8,7 @@ import numpy as np
 from typing import Dict, Tuple, Optional, List, Any
 import json
 from pathlib import Path
+from collections import Counter
 
 
 def world_to_map_coords(x: float, y: float, map_data: Dict, x_adjust: float = 50, y_adjust: float = -30) -> Tuple[float, float]:
@@ -869,13 +870,14 @@ def detect_sound_cues(kill_tick: int, victim_name: str, attacker_name: str, tick
     return sound_cues
 
 
-def extract_team_names(rounds_df: pd.DataFrame, ticks_df: pd.DataFrame) -> Tuple[str, str]:
+def extract_team_names(rounds_df: pd.DataFrame, ticks_df: pd.DataFrame, game_id: str = None) -> Tuple[str, str]:
     """
     Extract team names from round data or ticks data.
     
     Args:
         rounds_df: DataFrame with round data
         ticks_df: DataFrame with tick data
+        game_id: Optional game ID to filter data for specific game
         
     Returns:
         Tuple of (team1_name, team2_name)
@@ -883,9 +885,20 @@ def extract_team_names(rounds_df: pd.DataFrame, ticks_df: pd.DataFrame) -> Tuple
     team1_name = 'Team 1'
     team2_name = 'Team 2'
     
+    # Filter data by game_id if provided
+    if game_id is not None and 'game_id' in rounds_df.columns:
+        game_rounds = rounds_df[rounds_df['game_id'] == game_id]
+    else:
+        game_rounds = rounds_df
+    
+    if game_id is not None and 'game_id' in ticks_df.columns:
+        game_ticks = ticks_df[ticks_df['game_id'] == game_id]
+    else:
+        game_ticks = ticks_df
+    
     # Try to get team names from rounds data first
-    if not rounds_df.empty:
-        for _, round_data in rounds_df.iterrows():
+    if not game_rounds.empty:
+        for _, round_data in game_rounds.iterrows():
             # Check for various team name column patterns
             team1_cols = ['team1_name', 'team1', 'team_1', 'team_1_name', 't_team', 't_team_name']
             team2_cols = ['team2_name', 'team2', 'team_2', 'team_2_name', 'ct_team', 'ct_team_name']
@@ -904,12 +917,12 @@ def extract_team_names(rounds_df: pd.DataFrame, ticks_df: pd.DataFrame) -> Tuple
                 break
     
     # If no team names found in rounds, try to extract from ticks data
-    if (team1_name == 'Team 1' or team2_name == 'Team 2') and not ticks_df.empty:
+    if (team1_name == 'Team 1' or team2_name == 'Team 2') and not game_ticks.empty:
         # Look for team-related columns
-        team_columns = [col for col in ticks_df.columns if 'team' in col.lower()]
+        team_columns = [col for col in game_ticks.columns if 'team' in col.lower()]
         if team_columns:
             for team_col in team_columns:
-                unique_teams = ticks_df[team_col].dropna().unique()
+                unique_teams = game_ticks[team_col].dropna().unique()
                 if len(unique_teams) >= 2:
                     # Filter out numeric IDs and very long strings
                     valid_teams = []
@@ -926,18 +939,18 @@ def extract_team_names(rounds_df: pd.DataFrame, ticks_df: pd.DataFrame) -> Tuple
                         team2_name = valid_teams[1]
                         break
     
-    # If still no team names, try to extract from player names in ticks
-    if (team1_name == 'Team 1' or team2_name == 'Team 2') and not ticks_df.empty:
+    # Enhanced team name extraction from player names
+    if (team1_name == 'Team 1' or team2_name == 'Team 2') and not game_ticks.empty:
         # Look for player name columns
         player_col = None
         for col_name in ['player_name', 'name', 'player', 'attacker_name', 'victim_name']:
-            if col_name in ticks_df.columns:
+            if col_name in game_ticks.columns:
                 player_col = col_name
                 break
         
         if player_col:
             # Get unique player names and try to identify teams
-            unique_players = ticks_df[player_col].dropna().unique()
+            unique_players = game_ticks[player_col].dropna().unique()
             if len(unique_players) >= 10:  # Should have at least 10 players
                 # Filter out Steam IDs and very long names
                 valid_players = []
@@ -949,25 +962,83 @@ def extract_team_names(rounds_df: pd.DataFrame, ticks_df: pd.DataFrame) -> Tuple
                         valid_players.append(player_str)
                 
                 if len(valid_players) >= 10:
-                    # Try to identify team patterns
-                    # Look for common team name patterns in player names
-                    for player in valid_players:
-                        if any(team_id in player.lower() for team_id in ['team', 'clan', 'org', 'esports', 'gaming']):
-                            # Extract team name from player name
-                            parts = player.split()
-                            if len(parts) > 1:
-                                potential_team = parts[0]  # Assume first part is team name
-                                if team1_name == 'Team 1':
-                                    team1_name = potential_team
-                                elif team2_name == 'Team 2' and potential_team != team1_name:
-                                    team2_name = potential_team
-                                    break
+                    # Enhanced team name extraction
+                    team_names = extract_teams_from_player_names(valid_players)
+                    if len(team_names) >= 2:
+                        team1_name = team_names[0]
+                        team2_name = team_names[1]
     
-    # Final fallback: use generic names if we still have default values
+    # Final fallback: use more descriptive names if we still have default values
     if team1_name == 'Team 1':
-        team1_name = 'Terrorists'
+        # Try to generate a descriptive name based on player patterns
+        if not game_ticks.empty:
+            player_col = None
+            for col_name in ['player_name', 'name', 'player', 'attacker_name', 'victim_name']:
+                if col_name in game_ticks.columns:
+                    player_col = col_name
+                    break
+            
+            if player_col:
+                unique_players = game_ticks[player_col].dropna().unique()
+                if len(unique_players) >= 10:
+                    # Try to find a pattern in player names
+                    player_words = []
+                    for player in unique_players[:5]:  # Look at first 5 players
+                        words = str(player).split()
+                        player_words.extend(words)
+                    
+                    # Find most common word that could be a team identifier
+                    word_counts = Counter(player_words)
+                    common_words = [word for word, count in word_counts.most_common(10) 
+                                  if len(word) > 2 and not word.isdigit() and word.lower() not in ['the', 'and', 'for', 'with']]
+                    
+                    if common_words:
+                        team1_name = f"Team {common_words[0]}"
+                    else:
+                        team1_name = 'Terrorists'
+                else:
+                    team1_name = 'Terrorists'
+            else:
+                team1_name = 'Terrorists'
+        else:
+            team1_name = 'Terrorists'
+    
     if team2_name == 'Team 2':
-        team2_name = 'Counter-Terrorists'
+        # Generate a different team name for the second team
+        if team1_name != 'Terrorists':
+            # If we found a pattern for team1, try to find a different pattern for team2
+            if not game_ticks.empty:
+                player_col = None
+                for col_name in ['player_name', 'name', 'player', 'attacker_name', 'victim_name']:
+                    if col_name in game_ticks.columns:
+                        player_col = col_name
+                        break
+                
+                if player_col:
+                    unique_players = game_ticks[player_col].dropna().unique()
+                    if len(unique_players) >= 10:
+                        # Look for different patterns in remaining players
+                        player_words = []
+                        for player in unique_players[5:10]:  # Look at next 5 players
+                            words = str(player).split()
+                            player_words.extend(words)
+                        
+                        word_counts = Counter(player_words)
+                        common_words = [word for word, count in word_counts.most_common(10) 
+                                      if len(word) > 2 and not word.isdigit() and word.lower() not in ['the', 'and', 'for', 'with']]
+                        
+                        if common_words and common_words[0] not in team1_name:
+                            team2_name = f"Team {common_words[0]}"
+                        else:
+                            team2_name = 'Counter-Terrorists'
+                    else:
+                        team2_name = 'Counter-Terrorists'
+                else:
+                    team2_name = 'Counter-Terrorists'
+            else:
+                team2_name = 'Counter-Terrorists'
+        else:
+            team2_name = 'Counter-Terrorists'
     
     # Debug: Print what we found
     print(f"DEBUG: Extracted team names - {team1_name} vs {team2_name}")
@@ -985,6 +1056,163 @@ def extract_team_names(rounds_df: pd.DataFrame, ticks_df: pd.DataFrame) -> Tuple
     return team1_name, team2_name
 
 
+def extract_teams_from_player_names(player_names: List[str]) -> List[str]:
+    """
+    Extract team names from player names using pattern analysis.
+    
+    Args:
+        player_names: List of player names
+        
+    Returns:
+        List of detected team names
+    """
+    # Common team name patterns and keywords
+    team_keywords = [
+        'team', 'clan', 'org', 'esports', 'gaming', 'gaming', 'pro', 'esports',
+        'liquid', 'navi', 'faze', 'astralis', 'vitality', 'g2', 'cloud9', 'c9',
+        'fnatic', 'nip', 'mouz', 'heroic', 'ence', 'big', 'spirit', 'outsiders',
+        'imperial', 'pain', 'furia', 'mibr', 'complexity', 'col', 'eg', 'evil',
+        'geniuses', 'tsm', '100t', 'thieves', 'optic', 'og', 'vitality', 'vit',
+        'gambit', 'virtus', 'pro', 'vp', 'sk', 'skgaming', 'lg', 'luminosity',
+        'monte', 'apeks', 'eternal', 'fire', 'flames', 'flame', 'fire', 'flame',
+        'natus', 'vincere', 'natus vincere', 'team liquid', 'team vitality',
+        'team spirit', 'team g2', 'team fnatic', 'team nip', 'team mouz',
+        'team heroic', 'team ence', 'team big', 'team outsiders', 'team imperial',
+        'team pain', 'team furia', 'team mibr', 'team complexity', 'team eg',
+        'team tsm', 'team optic', 'team og', 'team gambit', 'team vp', 'team sk',
+        'team lg', 'team luminosity', 'team monte', 'team apeks', 'team eternal'
+    ]
+    
+    # Analyze player names for team patterns
+    potential_teams = []
+    
+    for player in player_names:
+        player_lower = player.lower()
+        
+        # Check for team prefixes (e.g., "Team Liquid | s1mple")
+        if '|' in player:
+            parts = player.split('|')
+            if len(parts) >= 2:
+                team_part = parts[0].strip()
+                if len(team_part) > 2 and not team_part.isdigit():
+                    potential_teams.append(team_part)
+        
+        # Check for team keywords in player names
+        for keyword in team_keywords:
+            if keyword in player_lower:
+                # Extract potential team name
+                words = player.split()
+                for i, word in enumerate(words):
+                    if keyword in word.lower():
+                        # Try to get the full team name
+                        if i > 0:
+                            # Check if previous word might be part of team name
+                            potential_team = f"{words[i-1]} {word}"
+                            if len(potential_team) > 3:
+                                potential_teams.append(potential_team)
+                        else:
+                            # Check if next word might be part of team name
+                            if i + 1 < len(words):
+                                potential_team = f"{word} {words[i+1]}"
+                                if len(potential_team) > 3:
+                                    potential_teams.append(potential_team)
+                            else:
+                                potential_teams.append(word)
+                        break
+        
+        # Check for common team name patterns (e.g., "Liquid.s1mple", "NAVI-electronic")
+        if '.' in player:
+            parts = player.split('.')
+            if len(parts) >= 2:
+                team_part = parts[0].strip()
+                if len(team_part) > 2 and not team_part.isdigit():
+                    potential_teams.append(team_part)
+        
+        if '-' in player:
+            parts = player.split('-')
+            if len(parts) >= 2:
+                team_part = parts[0].strip()
+                if len(team_part) > 2 and not team_part.isdigit():
+                    potential_teams.append(team_part)
+        
+        # Check for brackets pattern (e.g., "[Team] Player", "Player [Team]")
+        if '[' in player and ']' in player:
+            start = player.find('[')
+            end = player.find(']')
+            if start < end:
+                team_part = player[start+1:end].strip()
+                if len(team_part) > 2 and not team_part.isdigit():
+                    potential_teams.append(team_part)
+        
+        # Check for parentheses pattern (e.g., "(Team) Player", "Player (Team)")
+        if '(' in player and ')' in player:
+            start = player.find('(')
+            end = player.find(')')
+            if start < end:
+                team_part = player[start+1:end].strip()
+                if len(team_part) > 2 and not team_part.isdigit():
+                    potential_teams.append(team_part)
+        
+        # Check for underscore pattern (e.g., "Team_Player")
+        if '_' in player:
+            parts = player.split('_')
+            if len(parts) >= 2:
+                team_part = parts[0].strip()
+                if len(team_part) > 2 and not team_part.isdigit():
+                    potential_teams.append(team_part)
+    
+    # Filter and rank potential teams
+    team_counts = {}
+    for team in potential_teams:
+        # Clean up team name
+        team_clean = team.strip()
+        if len(team_clean) > 2 and not team_clean.isdigit():
+            team_counts[team_clean] = team_counts.get(team_clean, 0) + 1
+    
+    # Sort by frequency and return top teams
+    sorted_teams = sorted(team_counts.items(), key=lambda x: x[1], reverse=True)
+    
+    # Extract unique team names (avoid duplicates)
+    unique_teams = []
+    for team, count in sorted_teams:
+        # Check if this team name is not too similar to already added teams
+        is_unique = True
+        for existing_team in unique_teams:
+            if (team.lower() in existing_team.lower() or 
+                existing_team.lower() in team.lower() or
+                team.lower() == existing_team.lower()):
+                is_unique = False
+                break
+        
+        if is_unique and len(unique_teams) < 2:
+            unique_teams.append(team)
+    
+    # If we found teams, return them
+    if len(unique_teams) >= 2:
+        return unique_teams[:2]
+    
+    # If we only found one team, try to infer the second team
+    if len(unique_teams) == 1:
+        # Look for players that don't match the first team pattern
+        other_players = []
+        first_team = unique_teams[0].lower()
+        
+        for player in player_names:
+            player_lower = player.lower()
+            # Check if this player doesn't belong to the first team
+            if (first_team not in player_lower and 
+                not any(keyword in player_lower for keyword in first_team.split())):
+                other_players.append(player)
+        
+        # Try to extract team name from other players
+        if other_players:
+            other_team_names = extract_teams_from_player_names(other_players)
+            if other_team_names:
+                return [unique_teams[0], other_team_names[0]]
+    
+    return unique_teams
+
+
 def analyze_round_context(kill_tick: int, rounds_df: pd.DataFrame, 
                          bomb_df: pd.DataFrame, ticks_df: pd.DataFrame = None, tickrate: int = 64) -> Dict[str, Any]:
     """
@@ -1000,8 +1228,19 @@ def analyze_round_context(kill_tick: int, rounds_df: pd.DataFrame,
     Returns:
         Dictionary with round context information
     """
+    # Check if this is a combined dataset with game_id column
+    has_game_id = 'game_id' in rounds_df.columns
+    
+    # Find the game_id for this kill if we have game_id column
+    kill_game_id = None
+    if has_game_id and not ticks_df.empty:
+        # Find the game_id for this kill by looking at ticks around this time
+        kill_tick_row = ticks_df[ticks_df['tick'] == kill_tick]
+        if not kill_tick_row.empty:
+            kill_game_id = kill_tick_row.iloc[0].get('game_id')
+    
     # Extract team names first
-    team1_name, team2_name = extract_team_names(rounds_df, ticks_df if ticks_df is not None else pd.DataFrame())
+    team1_name, team2_name = extract_team_names(rounds_df, ticks_df if ticks_df is not None else pd.DataFrame(), kill_game_id)
     
     round_context = {
         'round_number': None,
@@ -1016,7 +1255,8 @@ def analyze_round_context(kill_tick: int, rounds_df: pd.DataFrame,
         'match_score_t': 0,
         'match_score_ct': 0,
         'team1_name': team1_name,
-        'team2_name': team2_name
+        'team2_name': team2_name,
+        'game_id': kill_game_id
     }
     
     # Find current round and calculate match score with proper team tracking
@@ -1025,12 +1265,18 @@ def analyze_round_context(kill_tick: int, rounds_df: pd.DataFrame,
         team1_score = 0
         team2_score = 0
         
+        # Filter rounds to only include rounds from the same game if we have game_id
+        if has_game_id and kill_game_id is not None:
+            game_rounds = rounds_df[rounds_df['game_id'] == kill_game_id].copy()
+        else:
+            game_rounds = rounds_df.copy()
+        
         # Track which team is on which side for each round
         # In CS2, teams switch sides after round 12 (or when a team reaches 13 wins)
         team1_side_history = {}  # Maps round number to side (T or CT)
         team2_side_history = {}
         
-        for _, round_data in rounds_df.iterrows():
+        for _, round_data in game_rounds.iterrows():
             round_num = round_data.get('round', 0)
             start_tick = round_data.get('start_tick', 0)
             end_tick = round_data.get('end_tick', float('inf'))

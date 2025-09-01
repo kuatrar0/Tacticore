@@ -22,7 +22,9 @@ from streamlit_app.components import (
     display_kill_info, create_navigation_controls, display_labeled_summary,
     create_export_button, create_file_uploaders, create_map_settings,
     create_batch_labeling_controls, create_ml_training_controls, create_labeled_data_importer,
-    auto_retrain_model
+    auto_retrain_model, create_active_learning_navigation, create_labeled_data_display,
+    display_model_predictions, create_live_labeling_feedback, create_enhanced_active_learning_navigation,
+    create_model_simulation_mode
 )
 from streamlit_app.transforms import (
     load_map_data, get_enhanced_kill_context
@@ -89,6 +91,9 @@ def initialize_session_state():
     
     if 'ml_mode' not in st.session_state:
         st.session_state.ml_mode = False
+    
+    if 'simulation_mode' not in st.session_state:
+        st.session_state.simulation_mode = False
     
     if 'batch_labels' not in st.session_state:
         st.session_state.batch_labels = {}
@@ -224,19 +229,26 @@ def main():
     # Mode selection
     mode = st.sidebar.selectbox(
         "Labeling Mode",
-        ["Single Kill", "Batch Mode", "ML Training Mode"],
+        ["Single Kill", "Batch Mode", "ML Training Mode", "Model Simulation"],
         index=0
     )
     
     if mode == "Batch Mode":
         st.session_state.batch_mode = True
         st.session_state.ml_mode = False
+        st.session_state.simulation_mode = False
     elif mode == "ML Training Mode":
         st.session_state.batch_mode = False
         st.session_state.ml_mode = True
+        st.session_state.simulation_mode = False
+    elif mode == "Model Simulation":
+        st.session_state.batch_mode = False
+        st.session_state.ml_mode = False
+        st.session_state.simulation_mode = True
     else:
         st.session_state.batch_mode = False
         st.session_state.ml_mode = False
+        st.session_state.simulation_mode = False
     
     # File uploads
     kills_df, ticks_df, grenades_df, damages_df, shots_df, smokes_df, infernos_df, bomb_df, rounds_df = create_file_uploaders()
@@ -276,6 +288,7 @@ def main():
     # Apply filters
     filtered_kills = apply_filters(kills_df, filters)
     st.session_state.filtered_kills = filtered_kills
+    st.session_state.total_kills_estimate = len(filtered_kills)
     
     # Load map data after we have kills data
     map_data = {}
@@ -446,6 +459,9 @@ def main():
             # Display enhanced kill information
             display_kill_info(kill_context)
             
+            # Display model predictions
+            display_model_predictions(kill_context, current_index, filtered_kills)
+            
             # Map visualization
             if map_data and Path(map_image_path).exists():
                 st.subheader("🗺️ Map Location")
@@ -471,6 +487,10 @@ def main():
                 if attacker_labels or victim_labels:
                     save_labeled_kill(kill_context, attacker_labels, victim_labels)
                     
+                    # Clear session state labels after saving
+                    st.session_state.current_attacker_labels = []
+                    st.session_state.current_victim_labels = []
+                    
                     # Auto-advance to next kill
                     if current_index < total_kills - 1:
                         st.session_state.current_kill_index = current_index + 1
@@ -478,32 +498,42 @@ def main():
                 else:
                     st.warning("Please select at least one label")
             
-            # Active learning navigation
-            if is_active_learning and 'active_learning_suggestions' in st.session_state:
-                suggestions = st.session_state['active_learning_suggestions']
-                if suggestions and 'suggested_indices' in suggestions:
-                    # Find the next uncertain kill
-                    suggested_indices = suggestions['suggested_indices']
-                    if current_index in suggested_indices:
-                        current_suggestion_idx = suggested_indices.index(current_index)
-                        if current_suggestion_idx < len(suggested_indices) - 1:
-                            next_uncertain_idx = suggested_indices[current_suggestion_idx + 1]
-                            if st.button("🎯 Next Uncertain Kill", type="secondary"):
-                                st.session_state.current_kill_index = next_uncertain_idx
-                                st.rerun()
-                    else:
-                        # Current kill is not in suggestions, go to first suggestion
-                        if suggested_indices:
-                            next_uncertain_idx = suggested_indices[0]
-                            if st.button("🎯 Go to Uncertain Kill", type="secondary"):
-                                st.session_state.current_kill_index = next_uncertain_idx
-                                st.rerun()
+            # Active learning navigation - ALWAYS visible
+            create_active_learning_navigation(current_index, total_kills, is_active_learning)
             
             # Navigation controls
             new_index = create_navigation_controls(total_kills, current_index)
             if new_index != current_index:
                 st.session_state.current_kill_index = new_index
+                # Clear session state labels when navigating to new kill
+                st.session_state.current_attacker_labels = []
+                st.session_state.current_victim_labels = []
                 st.rerun()
+    
+    elif st.session_state.simulation_mode:
+        # Model simulation mode
+        st.markdown('<div class="ml-mode">', unsafe_allow_html=True)
+        st.header("🤖 Model Simulation Mode")
+        st.markdown("Test the model's ability to predict labels and correct it to improve learning")
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Convert labeled data to DataFrame for simulation
+        labeled_kills_df = pd.DataFrame(st.session_state.labeled_data) if st.session_state.labeled_data else pd.DataFrame()
+        
+        # Get model predictions from session state
+        model_predictions = st.session_state.get('model_predictions', {})
+        
+        # Create simulation mode
+        create_model_simulation_mode(
+            filtered_kills, 
+            labeled_kills_df, 
+            model_predictions, 
+            map_data, 
+            tickrate, 
+            x_fine_tune, 
+            y_fine_tune, 
+            use_advanced
+        )
     
     else:
         # Standard single kill mode
@@ -581,6 +611,10 @@ def main():
                 if attacker_labels or victim_labels:
                     save_labeled_kill(kill_context, attacker_labels, victim_labels)
                     
+                    # Clear session state labels after saving
+                    st.session_state.current_attacker_labels = []
+                    st.session_state.current_victim_labels = []
+                    
                     # Auto-advance to next kill
                     if current_index < total_kills - 1:
                         st.session_state.current_kill_index = current_index + 1
@@ -588,47 +622,21 @@ def main():
                 else:
                     st.warning("Please select at least one label")
             
-            # Active learning navigation
-            if is_active_learning and 'active_learning_suggestions' in st.session_state:
-                suggestions = st.session_state['active_learning_suggestions']
-                if suggestions and 'suggested_indices' in suggestions:
-                    # Find the next uncertain kill
-                    suggested_indices = suggestions['suggested_indices']
-                    if current_index in suggested_indices:
-                        current_suggestion_idx = suggested_indices.index(current_index)
-                        if current_suggestion_idx < len(suggested_indices) - 1:
-                            next_uncertain_idx = suggested_indices[current_suggestion_idx + 1]
-                            if st.button("🎯 Next Uncertain Kill", type="secondary"):
-                                st.session_state.current_kill_index = next_uncertain_idx
-                                st.rerun()
-                    else:
-                        # Current kill is not in suggestions, go to first suggestion
-                        if suggested_indices:
-                            next_uncertain_idx = suggested_indices[0]
-                            if st.button("🎯 Go to Uncertain Kill", type="secondary"):
-                                st.session_state.current_kill_index = next_uncertain_idx
-                                st.rerun()
+            # Active learning navigation - ALWAYS visible
+            create_active_learning_navigation(current_index, total_kills, is_active_learning)
             
             # Navigation controls
             new_index = create_navigation_controls(total_kills, current_index)
             if new_index != current_index:
                 st.session_state.current_kill_index = new_index
+                # Clear session state labels when navigating to new kill
+                st.session_state.current_attacker_labels = []
+                st.session_state.current_victim_labels = []
                 st.rerun()
     
-    # Bottom section
-    st.markdown("---")
-    
-    # Labeled data summary
-    if st.session_state.labeled_data:
-        display_labeled_summary(st.session_state.labeled_data)
-        
-        # Export button
-        create_export_button(st.session_state.labeled_data)
-        
-        # Clear all labels button
-        if st.button("🗑️ Clear All Labels"):
-            st.session_state.labeled_data = []
-            st.rerun()
+    # Bottom section - Enhanced labeled data display
+    create_live_labeling_feedback()
+    create_labeled_data_display()
     
     # Instructions
     with st.expander("📖 Instructions"):
@@ -637,7 +645,7 @@ def main():
         
         1. **Upload Data**: Upload your parsed demo files (kills.parquet, ticks.parquet, optional grenades.parquet)
         2. **Configure Map**: Set the map image path and map data JSON file
-        3. **Choose Mode**: Select Single Kill, Batch Mode, or ML Training Mode
+        3. **Choose Mode**: Select Single Kill, Batch Mode, ML Training Mode, or Model Simulation
         4. **Filter Kills**: Use the sidebar filters to focus on specific kills
         5. **Analyze Context**: Review the kill information and map location
         6. **Apply Labels**: Select appropriate labels for both attacker and victim
@@ -649,15 +657,16 @@ def main():
         **Single Kill Mode**: Traditional one-by-one labeling
         **Batch Mode**: Label multiple kills at once for faster processing
         **ML Training Mode**: Enhanced context with ML assistance and active learning
+        **Model Simulation**: Test the model's predictions and correct them to improve learning
         
-                 ### Enhanced Context Features (ML Mode):
-         
-         - **Sound Cues**: Detect if victim heard attacker before death
-         - **Victim Awareness**: Detect if victim was watching the attacker or was backstabbed
-         - **Round Context**: Time in round, bomb status, round phase
-         - **Utility Analysis**: Active grenades, smokes, molotovs
-         - **Player States**: Movement, weapons, positioning
-         - **Tactical Analysis**: Distance categories, advantages
+        ### Enhanced Context Features (ML Mode):
+        
+        - **Sound Cues**: Detect if victim heard attacker before death
+        - **Victim Awareness**: Detect if victim was watching the attacker or was backstabbed
+        - **Round Context**: Time in round, bomb status, round phase
+        - **Utility Analysis**: Active grenades, smokes, molotovs
+        - **Player States**: Movement, weapons, positioning
+        - **Tactical Analysis**: Distance categories, advantages
         
         ### Labeling Guidelines:
         
@@ -670,15 +679,15 @@ def main():
         - `bad_positioning` - Poor positioning
         - `other` - Other factors
         
-                 **Victim Labels:**
-         - `exposed` - Victim was exposed
-         - `no_cover` - Victim had no cover
-         - `good_position` - Victim was well positioned
-         - `mistake` - Victim made a mistake
-         - `bad_clearing` - Victim failed to clear an area properly
-         - `other` - Other factors
-         
-         **Multiple Labels:** You can now select multiple labels for both attacker and victim to capture complex situations where a player has both good and bad aspects to their play.
+        **Victim Labels:**
+        - `exposed` - Victim was exposed
+        - `no_cover` - Victim had no cover
+        - `good_position` - Victim was well positioned
+        - `mistake` - Victim made a mistake
+        - `bad_clearing` - Victim failed to clear an area properly
+        - `other` - Other factors
+        
+        **Multiple Labels:** You can now select multiple labels for both attacker and victim to capture complex situations where a player has both good and bad aspects to their play.
         """)
 
 

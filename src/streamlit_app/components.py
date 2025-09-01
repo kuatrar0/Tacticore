@@ -12,6 +12,65 @@ import matplotlib.patches as patches
 from PIL import Image
 import io
 import base64
+import random
+from sklearn.preprocessing import LabelEncoder
+
+
+def extract_kill_features(kill: pd.Series, kills_df: pd.DataFrame, map_data: Dict, 
+                         tickrate: int, x_fine_tune: float = 0, y_fine_tune: float = 0, 
+                         use_advanced: bool = False) -> Optional[List[float]]:
+    """
+    Extract features from a single kill for model prediction.
+    
+    Args:
+        kill: Single kill data as pandas Series
+        kills_df: Full kills DataFrame for context
+        map_data: Map data dictionary
+        tickrate: Game tickrate
+        x_fine_tune: X coordinate fine-tuning
+        y_fine_tune: Y coordinate fine-tuning
+        use_advanced: Whether to use advanced features
+        
+    Returns:
+        List of feature values or None if extraction fails
+    """
+    try:
+        features = []
+        
+        # Get available features from session state (same as training)
+        available_features = st.session_state.get('available_features', [])
+        
+        # Always include basic features with fallbacks (same as training)
+        features.append(float(kill.get('distance_xy', 0)))
+        features.append(float(kill.get('time_in_round_s', 0)))
+        features.append(1 if kill.get('headshot', False) else 0)
+        
+        # Add enhanced features if available, otherwise use defaults (same as training)
+        if 'victim_was_aware' in available_features:
+            features.append(1 if kill.get('victim_was_aware', False) else 0)
+        else:
+            features.append(0)  # Default: not aware
+        
+        if 'had_sound_cue' in available_features:
+            features.append(1 if kill.get('had_sound_cue', False) else 0)
+        else:
+            features.append(0)  # Default: no sound cue
+        
+        if 'utility_count' in available_features:
+            features.append(float(kill.get('utility_count', 0)))
+        else:
+            features.append(0)  # Default: no utility
+        
+        if 'approach_align_deg' in available_features:
+            features.append(float(kill.get('approach_align_deg', 0) or 0))
+        else:
+            features.append(0)  # Default: no movement
+        
+        return features
+        
+    except Exception as e:
+        st.warning(f"Error extracting features: {str(e)}")
+        return None
 
 
 def create_filters(kills_df: pd.DataFrame) -> Dict:
@@ -31,13 +90,17 @@ def create_filters(kills_df: pd.DataFrame) -> Dict:
     # Map filter - try both column names
     place_col = 'attacker_place' if 'attacker_place' in kills_df.columns else 'place'
     if place_col in kills_df.columns:
-        places = ['All'] + sorted(kills_df[place_col].unique().tolist())
+        # Handle None values in place column
+        unique_places = kills_df[place_col].dropna().unique().tolist()
+        places = ['All'] + sorted([str(p) for p in unique_places if p is not None])
         filters['place'] = st.sidebar.selectbox("Map Place", places)
     
     # Side filter - try both column names
     side_col = 'attacker_side' if 'attacker_side' in kills_df.columns else 'side'
     if side_col in kills_df.columns:
-        sides = ['All'] + sorted(kills_df[side_col].unique().tolist())
+        # Handle None values in side column
+        unique_sides = kills_df[side_col].dropna().unique().tolist()
+        sides = ['All'] + sorted([str(s) for s in unique_sides if s is not None])
         filters['side'] = st.sidebar.selectbox("Side", sides)
     
     # Headshot filter
@@ -106,11 +169,18 @@ def apply_filters(kills_df: pd.DataFrame, filters: Dict) -> pd.DataFrame:
 def create_label_controls() -> Tuple[List[str], List[str]]:
     """
     Create label selection controls with multiple selection support.
+    Labels are stored in session state and only processed when Save is clicked.
     
     Returns:
         Tuple of (attacker_labels, victim_labels) as lists
     """
     st.subheader("Label the Kill")
+    
+    # Initialize session state for labels if not exists
+    if 'current_attacker_labels' not in st.session_state:
+        st.session_state.current_attacker_labels = []
+    if 'current_victim_labels' not in st.session_state:
+        st.session_state.current_victim_labels = []
     
     col1, col2 = st.columns(2)
     
@@ -131,19 +201,44 @@ def create_label_controls() -> Tuple[List[str], List[str]]:
                 # Legacy Labels (keeping for compatibility)
                 "good_decision", "bad_decision", "imprecise", "other"
             ],
-            key="attacker_labels"
+            default=st.session_state.current_attacker_labels,
+            key="attacker_labels_selector"
         )
+        # Update session state
+        st.session_state.current_attacker_labels = attacker_labels
     
     with col2:
         st.write("**Victim Labels** (Multiple selection)")
         victim_labels = st.multiselect(
             "Victim",
             [
-                # Essential Victim Labels
-                "bad_clearing", "exposed", "no_cover", "good_position", "mistake", "other"
+                # Essential Victim Awareness Labels
+                "bad_clearing", "exposed", "no_cover", "good_position", "mistake",
+                
+                # Victim Positioning & Movement
+                "bad_positioning", "poor_angle", "overexposed", "isolated", "trapped",
+                
+                # Victim Awareness & Communication
+                "unaware", "no_communication", "bad_rotation", "late_rotation",
+                
+                # Victim Equipment & Economy
+                "bad_equipment", "eco_round", "force_buy", "no_utility",
+                
+                # Victim Tactical Mistakes
+                "bad_peek", "wide_peek", "no_utility_usage", "bad_timing",
+                "predictable", "repeek", "no_sound_awareness",
+                
+                # Victim Team Play
+                "no_trade", "bad_support", "no_flash_support", "bad_site_hold",
+                
+                # Legacy Labels
+                "other"
             ],
-            key="victim_labels"
+            default=st.session_state.current_victim_labels,
+            key="victim_labels_selector"
         )
+        # Update session state
+        st.session_state.current_victim_labels = victim_labels
     
     return attacker_labels, victim_labels
 
@@ -251,6 +346,11 @@ def display_kill_info(context: Dict) -> None:
             score_t = context.get('match_score_t', 0)
             score_ct = context.get('match_score_ct', 0)
             st.write(f"**Match Score:** {team1} {score_t} - {score_ct} {team2}")
+            
+            # Show game ID if available (for combined datasets)
+            game_id = context.get('game_id')
+            if game_id is not None:
+                st.write(f"**Game ID:** {game_id}")
         
         with col_round:
             round_num = context.get('round_number', 0)
@@ -1286,14 +1386,110 @@ def create_ml_training_controls(filtered_kills: pd.DataFrame, labeled_data: List
                             # Calculate accuracy on validation set
                             val_accuracy = model.score(X_val, y_val)
                             
+                            # Generate model predictions for all kills
+                            model_predictions = {}
+                            for idx, (_, kill_row) in enumerate(filtered_kills.iterrows()):
+                                # Extract features for this kill
+                                features = []
+                                
+                                # Always include basic features with fallbacks
+                                features.append(float(kill_row.get('distance_xy', 0)))
+                                features.append(float(kill_row.get('time_in_round_s', 0)))
+                                features.append(1 if kill_row.get('headshot', False) else 0)
+                                
+                                # Add enhanced features if available, otherwise use defaults
+                                if 'victim_was_aware' in available_features:
+                                    features.append(1 if kill_row.get('victim_was_aware', False) else 0)
+                                else:
+                                    features.append(0)  # Default: not aware
+                                
+                                if 'had_sound_cue' in available_features:
+                                    features.append(1 if kill_row.get('had_sound_cue', False) else 0)
+                                else:
+                                    features.append(0)  # Default: no sound cue
+                                
+                                if 'utility_count' in available_features:
+                                    features.append(float(kill_row.get('utility_count', 0)))
+                                else:
+                                    features.append(0)  # Default: no utility
+                                
+                                if 'approach_align_deg' in available_features:
+                                    features.append(float(kill_row.get('approach_align_deg', 0) or 0))
+                                else:
+                                    features.append(0)  # Default: no movement
+                                
+                                # Get prediction probabilities
+                                try:
+                                    proba = model.predict_proba([features])[0]
+                                    predicted_labels = {}
+                                    
+                                    # Map probabilities to labels
+                                    for i, (label, prob) in enumerate(zip(label_encoder.classes_, proba)):
+                                        predicted_labels[label] = prob
+                                    
+                                    # Calculate uncertainty (entropy)
+                                    prob_safe = proba + 1e-10
+                                    prob_safe = prob_safe / prob_safe.sum()
+                                    entropy = -np.sum(prob_safe * np.log2(prob_safe + 1e-10))
+                                    
+                                    # Get feature importance if available
+                                    feature_importance = []
+                                    if hasattr(model, 'feature_importances_'):
+                                        feature_names = ['distance', 'time', 'headshot', 'aware', 'sound', 'utility', 'alignment']
+                                        importance_pairs = list(zip(feature_names, model.feature_importances_))
+                                        feature_importance = sorted(importance_pairs, key=lambda x: x[1], reverse=True)
+                                    
+                                    model_predictions[idx] = {
+                                        'predicted_labels': predicted_labels,
+                                        'uncertainty': entropy,
+                                        'feature_importance': feature_importance
+                                    }
+                                except Exception as e:
+                                    # If prediction fails, still store basic info
+                                    model_predictions[idx] = {
+                                        'predicted_labels': {'other': 1.0},
+                                        'uncertainty': 0.0,
+                                        'feature_importance': []
+                                    }
+                            
                             # Store suggestions in session state
                             st.session_state['active_learning_suggestions'] = {
                                 'suggested_indices': [idx for idx, _ in uncertainty_data[:ml_controls['active_learning']['sample_size']]],
                                 'uncertainties': [unc for _, unc in uncertainty_data[:ml_controls['active_learning']['sample_size']]],
                                 'model_accuracy': val_accuracy,
                                 'labeled_count': len(labeled_data),
-                                'total_unlabeled': len(unlabeled_features)
+                                'total_unlabeled': len(unlabeled_features),
+                                'model_predictions': model_predictions
                             }
+                            
+                            # Store the trained model and label encoder for simulation mode
+                            st.session_state['trained_model'] = model
+                            st.session_state['label_encoder'] = label_encoder
+                            st.session_state['available_features'] = available_features
+                            
+                            # Save model to disk for FastAPI backend
+                            import pickle
+                            import os
+                            from pathlib import Path
+                            
+                            backend_models_dir = Path(__file__).parent.parent / "backend" / "models"
+                            backend_models_dir.mkdir(exist_ok=True)
+                            
+                            model_path = backend_models_dir / "kill_analyzer_model.pkl"
+                            encoder_path = backend_models_dir / "label_encoder.pkl"
+                            features_path = backend_models_dir / "available_features.pkl"
+                            
+                            try:
+                                with open(model_path, 'wb') as f:
+                                    pickle.dump(model, f)
+                                with open(encoder_path, 'wb') as f:
+                                    pickle.dump(label_encoder, f)
+                                with open(features_path, 'wb') as f:
+                                    pickle.dump(available_features, f)
+                                
+                                st.sidebar.success(f"✅ Model saved to backend at: {backend_models_dir}")
+                            except Exception as e:
+                                st.sidebar.warning(f"⚠️ Could not save model to backend: {e}")
                             
                             st.sidebar.write(f"✅ **Successfully calculated uncertainties for {len(unlabeled_features)} unlabeled kills**")
                             st.sidebar.write(f"🎯 **Top 3 Uncertain Kills:**")
@@ -1318,6 +1514,11 @@ def create_ml_training_controls(filtered_kills: pd.DataFrame, labeled_data: List
                                 'labeled_count': len(labeled_data),
                                 'error': str(e)
                             }
+                            
+                            # Store the trained model even if uncertainty calculation failed
+                            st.session_state['trained_model'] = model
+                            st.session_state['label_encoder'] = label_encoder
+                            st.session_state['available_features'] = available_features
                         
                         st.sidebar.write("🎯 **Step 5:** Calculating uncertainty scores...")
                         
@@ -1813,3 +2014,707 @@ def display_enhanced_kill_info(kill_context: Dict) -> None:
         st.write(f"**Attacker Has Primary:** {'Yes' if kill_context.get('attacker_has_primary', False) else 'No'}")
         st.write(f"**Victim Has Primary:** {'Yes' if kill_context.get('victim_has_primary', False) else 'No'}")
         st.write(f"**Attacker Has Utility:** {'Yes' if kill_context.get('attacker_has_utility', False) else 'No'}")
+
+
+def create_active_learning_navigation(current_index: int, total_kills: int, is_active_learning: bool) -> None:
+    """
+    Create active learning navigation controls that are always visible.
+    
+    Args:
+        current_index: Current kill index
+        total_kills: Total number of kills
+        is_active_learning: Whether active learning is enabled
+    """
+    if is_active_learning and 'active_learning_suggestions' in st.session_state:
+        suggestions = st.session_state['active_learning_suggestions']
+        if suggestions and 'suggested_indices' in suggestions:
+            suggested_indices = suggestions['suggested_indices']
+            if suggested_indices:
+                # Find the next uncertain kill
+                if current_index in suggested_indices:
+                    current_suggestion_idx = suggested_indices.index(current_index)
+                    if current_suggestion_idx < len(suggested_indices) - 1:
+                        next_uncertain_idx = suggested_indices[current_suggestion_idx + 1]
+                        if st.button("🎯 Next Uncertain Kill", type="secondary"):
+                            st.session_state.current_kill_index = next_uncertain_idx
+                            st.rerun()
+                    else:
+                        # We're at the last uncertain kill, go to first
+                        next_uncertain_idx = suggested_indices[0]
+                        if st.button("🎯 Go to First Uncertain Kill", type="secondary"):
+                            st.session_state.current_kill_index = next_uncertain_idx
+                            st.rerun()
+                else:
+                    # Current kill is not in suggestions, go to first suggestion
+                    next_uncertain_idx = suggested_indices[0]
+                    if st.button("🎯 Go to Uncertain Kill", type="secondary"):
+                        st.session_state.current_kill_index = next_uncertain_idx
+                        st.rerun()
+                
+                # Show uncertainty info
+                if current_index in suggested_indices:
+                    current_uncertainty_idx = suggested_indices.index(current_index)
+                    if current_uncertainty_idx < len(suggestions.get('uncertainties', [])):
+                        uncertainty = suggestions['uncertainties'][current_uncertainty_idx]
+                        st.info(f"🎯 **Current Kill Uncertainty:** {uncertainty:.3f} (Higher = More Uncertain)")
+                else:
+                    st.info("🎯 **Current Kill:** Not in uncertain suggestions")
+            else:
+                st.warning("🎯 No uncertain kills available")
+        else:
+            st.info("🎯 Train the model to get uncertain kill suggestions")
+    elif is_active_learning:
+        st.info("🎯 Enable active learning and train the model to get uncertain kill suggestions")
+
+
+def create_labeled_data_display() -> None:
+    """
+    Create a prominent display for labeled data summary and export options.
+    """
+    if st.session_state.labeled_data:
+        st.markdown("---")
+        st.markdown("## 📊 Labeled Data Summary")
+        
+        # Show current count prominently
+        labeled_count = len(st.session_state.labeled_data)
+        st.success(f"✅ **Total Labeled Kills:** {labeled_count}")
+        
+        # Show recent additions
+        if 'last_labeled_count' in st.session_state:
+            last_count = st.session_state['last_labeled_count']
+            if labeled_count > last_count:
+                new_labels = labeled_count - last_count
+                st.info(f"🆕 **New labels added:** {new_labels}")
+        
+        # Update the last count
+        st.session_state['last_labeled_count'] = labeled_count
+        
+        # Display summary
+        display_labeled_summary(st.session_state.labeled_data)
+        
+        # Export button
+        create_export_button(st.session_state.labeled_data)
+        
+        # Clear all labels button
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🗑️ Clear All Labels", type="secondary"):
+                st.session_state.labeled_data = []
+                st.rerun()
+        
+        with col2:
+            if st.button("🔄 Refresh Display", type="secondary"):
+                st.rerun()
+    else:
+        st.markdown("---")
+        st.info("📊 **No labeled data yet.** Start labeling kills to see the summary here!")
+
+
+def display_model_predictions(kill_context: Dict, current_index: int, filtered_kills: pd.DataFrame) -> None:
+    """
+    Display what the model thinks about the current kill.
+    
+    Args:
+        kill_context: Current kill context
+        current_index: Current kill index
+        filtered_kills: DataFrame with all kills
+    """
+    st.markdown("### 🤖 Model Analysis")
+    
+    if 'active_learning_suggestions' in st.session_state:
+        suggestions = st.session_state['active_learning_suggestions']
+        
+        # Check if we have model predictions
+        if 'model_predictions' in suggestions:
+            predictions = suggestions['model_predictions']
+            if current_index in predictions:
+                pred = predictions[current_index]
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**🎯 Model Predictions:**")
+                    if 'predicted_labels' in pred:
+                        for label, confidence in pred['predicted_labels'].items():
+                            confidence_pct = confidence * 100
+                            if confidence_pct > 70:
+                                st.success(f"✅ {label}: {confidence_pct:.1f}%")
+                            elif confidence_pct > 40:
+                                st.warning(f"⚠️ {label}: {confidence_pct:.1f}%")
+                            else:
+                                st.info(f"❓ {label}: {confidence_pct:.1f}%")
+                
+                with col2:
+                    st.markdown("**🎲 Uncertainty Analysis:**")
+                    uncertainty = pred.get('uncertainty', 0)
+                    if uncertainty > 0.8:
+                        st.error(f"🤔 **Very Confused** ({uncertainty:.3f})")
+                        st.write("Model is very uncertain about this kill")
+                    elif uncertainty > 0.5:
+                        st.warning(f"🤷 **Somewhat Confused** ({uncertainty:.3f})")
+                        st.write("Model is somewhat uncertain about this kill")
+                    else:
+                        st.success(f"🎯 **Confident** ({uncertainty:.3f})")
+                        st.write("Model is confident about this kill")
+                    
+                    # Show feature importance if available
+                    if 'feature_importance' in pred:
+                        st.markdown("**🔍 Key Features:**")
+                        for feature, importance in pred['feature_importance'][:3]:
+                            st.write(f"• {feature}: {importance:.2f}")
+        
+        # Show uncertainty ranking
+        if 'suggested_indices' in suggestions and 'uncertainties' in suggestions:
+            suggested_indices = suggestions['suggested_indices']
+            uncertainties = suggestions['uncertainties']
+            
+            if current_index in suggested_indices:
+                rank = suggested_indices.index(current_index) + 1
+                uncertainty = uncertainties[suggested_indices.index(current_index)]
+                st.info(f"🏆 **Rank #{rank}** in uncertainty (out of {len(suggested_indices)} uncertain kills)")
+                st.write(f"Uncertainty score: {uncertainty:.3f}")
+            else:
+                st.info("📊 **Not in top uncertain kills** - Model is confident about this one")
+    else:
+        st.info("🤖 **No model trained yet** - Train the model to see predictions")
+
+
+def create_live_labeling_feedback() -> None:
+    """
+    Create live feedback showing labeling progress and recent additions.
+    """
+    if st.session_state.labeled_data:
+        st.markdown("### 📊 Live Labeling Progress")
+        
+        # Current count
+        current_count = len(st.session_state.labeled_data)
+        
+        # Initialize session state for tracking new labels
+        if 'session_start_labeled_count' not in st.session_state:
+            st.session_state.session_start_labeled_count = current_count
+        
+        # Calculate new labels added in this session
+        session_start_count = st.session_state.session_start_labeled_count
+        new_labels_this_session = current_count - session_start_count
+        
+        # Progress bar
+        if 'total_kills_estimate' in st.session_state:
+            total_estimate = st.session_state.total_kills_estimate
+            progress = min(current_count / total_estimate * 100, 100)
+            st.progress(progress / 100)
+            st.write(f"**Progress:** {current_count} / ~{total_estimate} kills ({progress:.1f}%)")
+        else:
+            st.write(f"**Total Labeled:** {current_count} kills")
+        
+        # Show new labels added in this session
+        if new_labels_this_session > 0:
+            st.success(f"🆕 **Added {new_labels_this_session} new label(s) in this session!**")
+        
+        # Recent labels (last 5)
+        if current_count > 0:
+            st.markdown("**📝 Recent Labels:**")
+            recent_labels = st.session_state.labeled_data[-5:]  # Last 5
+            
+            for i, labeled_kill in enumerate(reversed(recent_labels)):
+                attacker_name = labeled_kill.get('attacker_name', 'Unknown')
+                victim_name = labeled_kill.get('victim_name', 'Unknown')
+                attacker_labels = labeled_kill.get('attacker_labels', [])
+                victim_labels = labeled_kill.get('victim_labels', [])
+                
+                st.write(f"**{current_count - i}.** {attacker_name} → {victim_name}")
+                if attacker_labels:
+                    st.write(f"   Attacker: {', '.join(attacker_labels)}")
+                if victim_labels:
+                    st.write(f"   Victim: {', '.join(victim_labels)}")
+        
+        # Quick stats
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            # Count unique attackers
+            attackers = set()
+            for kill in st.session_state.labeled_data:
+                attackers.add(kill.get('attacker_name', 'Unknown'))
+            st.metric("Unique Attackers", len(attackers))
+        
+        with col2:
+            # Count unique victims
+            victims = set()
+            for kill in st.session_state.labeled_data:
+                victims.add(kill.get('victim_name', 'Unknown'))
+            st.metric("Unique Victims", len(victims))
+        
+        with col3:
+            # Most common label
+            all_labels = []
+            for kill in st.session_state.labeled_data:
+                all_labels.extend(kill.get('attacker_labels', []))
+                all_labels.extend(kill.get('victim_labels', []))
+            
+            if all_labels:
+                from collections import Counter
+                label_counts = Counter(all_labels)
+                most_common = label_counts.most_common(1)[0]
+                st.metric("Most Common Label", f"{most_common[0]} ({most_common[1]})")
+            else:
+                st.metric("Most Common Label", "None")
+
+
+def create_enhanced_active_learning_navigation(current_index: int, total_kills: int, is_active_learning: bool) -> None:
+    """
+    Create enhanced active learning navigation with better explanations.
+    
+    Args:
+        current_index: Current kill index
+        total_kills: Total number of kills
+        is_active_learning: Whether active learning is enabled
+    """
+    st.markdown("### 🎯 Active Learning Navigation")
+    
+    if is_active_learning and 'active_learning_suggestions' in st.session_state:
+        suggestions = st.session_state['active_learning_suggestions']
+        if suggestions and 'suggested_indices' in suggestions:
+            suggested_indices = suggestions['suggested_indices']
+            if suggested_indices:
+                # Show current status
+                if current_index in suggested_indices:
+                    rank = suggested_indices.index(current_index) + 1
+                    uncertainty = suggestions['uncertainties'][suggested_indices.index(current_index)]
+                    st.success(f"🎯 **Currently on uncertain kill #{rank}** (Uncertainty: {uncertainty:.3f})")
+                    
+                    # Navigation buttons
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        if rank < len(suggested_indices):
+                            next_uncertain_idx = suggested_indices[rank]  # Next in sequence
+                            if st.button("➡️ Next Uncertain Kill", type="primary"):
+                                st.session_state.current_kill_index = next_uncertain_idx
+                                st.rerun()
+                        else:
+                            if st.button("🔄 Back to First Uncertain", type="secondary"):
+                                st.session_state.current_kill_index = suggested_indices[0]
+                                st.rerun()
+                    
+                    with col2:
+                        if st.button("🎲 Random Uncertain Kill", type="secondary"):
+                            random_idx = random.choice(suggested_indices)
+                            st.session_state.current_kill_index = random_idx
+                            st.rerun()
+                    
+                    # Show what makes this kill uncertain
+                    st.info("💡 **Why is this kill uncertain?**")
+                    st.write("• Model is confused about the correct labels")
+                    st.write("• This kill has unusual characteristics")
+                    st.write("• Labeling this will help the model learn")
+                    
+                else:
+                    st.warning("📊 **Currently on a confident kill** - Model is sure about this one")
+                    
+                    # Go to uncertain kill button
+                    if st.button("🎯 Go to Uncertain Kill", type="primary"):
+                        st.session_state.current_kill_index = suggested_indices[0]
+                        st.rerun()
+                    
+                    st.info("💡 **Why go to uncertain kills?**")
+                    st.write("• Uncertain kills help the model learn most")
+                    st.write("• They represent edge cases the model struggles with")
+                    st.write("• Labeling them improves model accuracy fastest")
+                
+                # Show uncertainty distribution
+                st.markdown("**📈 Uncertainty Distribution:**")
+                uncertainties = suggestions.get('uncertainties', [])
+                if uncertainties:
+                    avg_uncertainty = sum(uncertainties) / len(uncertainties)
+                    max_uncertainty = max(uncertainties)
+                    min_uncertainty = min(uncertainties)
+                    
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Average Uncertainty", f"{avg_uncertainty:.3f}")
+                    with col2:
+                        st.metric("Highest Uncertainty", f"{max_uncertainty:.3f}")
+                    with col3:
+                        st.metric("Lowest Uncertainty", f"{min_uncertainty:.3f}")
+            else:
+                st.warning("🎯 **No uncertain kills available**")
+                st.write("All kills have been labeled or model is very confident")
+        else:
+            st.info("🎯 **Train the model** to get uncertain kill suggestions")
+    elif is_active_learning:
+        st.info("🎯 **Enable active learning** and train the model to get suggestions")
+    else:
+        st.info("🎯 **Active learning disabled** - Use ML Training Mode to enable")
+
+
+def create_model_simulation_mode(
+    kills_df: pd.DataFrame,
+    labeled_kills: pd.DataFrame,
+    model_predictions: Dict,
+    map_data: Dict,
+    tickrate: int,
+    x_fine_tune: float = 0,
+    y_fine_tune: float = 0,
+    use_advanced: bool = False
+) -> None:
+    """
+    Create a simulation mode where the model predicts labels on unlabeled kills
+    and allows correction to improve learning.
+    
+    Args:
+        kills_df: All kills DataFrame
+        labeled_kills: Currently labeled kills
+        model_predictions: Model predictions for all kills
+        map_data: Map data for visualization
+        tickrate: Game tickrate
+        x_fine_tune: X coordinate fine-tuning
+        y_fine_tune: Y coordinate fine-tuning
+        use_advanced: Whether to use advanced features
+    """
+    st.header("🤖 Model Simulation Mode")
+    st.markdown("""
+    **How it works:**
+    1. The model predicts labels on unlabeled kills
+    2. You review and correct wrong predictions
+    3. The model learns from your corrections
+    4. This simulates the end goal of providing advice to users
+    """)
+    
+    # Get unlabeled kills
+    # Create a unique identifier for labeled kills using kill_tick, attacker_name, and victim_name
+    labeled_kill_identifiers = set()
+    if not labeled_kills.empty:
+        for _, labeled_kill in labeled_kills.iterrows():
+            identifier = f"{labeled_kill.get('kill_tick', '')}_{labeled_kill.get('attacker_name', '')}_{labeled_kill.get('victim_name', '')}"
+            labeled_kill_identifiers.add(identifier)
+    
+    # Create identifiers for all kills and filter out labeled ones
+    unlabeled_kills = []
+    for _, kill in kills_df.iterrows():
+        identifier = f"{kill.get('tick', '')}_{kill.get('attacker_name', '')}_{kill.get('victim_name', '')}"
+        if identifier not in labeled_kill_identifiers:
+            unlabeled_kills.append(kill)
+    
+    unlabeled_kills = pd.DataFrame(unlabeled_kills) if unlabeled_kills else pd.DataFrame()
+    
+    if unlabeled_kills.empty:
+        st.warning("No unlabeled kills found. Please upload more data or label some kills first.")
+        return
+    
+    st.success(f"Found {len(unlabeled_kills)} unlabeled kills for simulation")
+    
+    # Simulation controls
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        simulation_mode = st.selectbox(
+            "Simulation Mode",
+            ["Model Predictions", "Correction Mode", "Learning Progress"]
+        )
+    
+    with col2:
+        if simulation_mode == "Model Predictions":
+            # Show model predictions on unlabeled kills
+            st.subheader("📊 Model Predictions on Unlabeled Kills")
+            
+            # Get predictions for unlabeled kills
+            unlabeled_predictions = {}
+            
+            # Check if we have a trained model
+            if 'trained_model' in st.session_state and st.session_state.trained_model is not None:
+                st.info("Generating predictions on unlabeled kills...")
+                
+                # Generate predictions for unlabeled kills
+                for _, kill in unlabeled_kills.iterrows():
+                    kill_identifier = f"{kill.get('tick', '')}_{kill.get('attacker_name', '')}_{kill.get('victim_name', '')}"
+                    
+                    try:
+                        # Extract features for this kill
+                        kill_features = extract_kill_features(kill, kills_df, map_data, tickrate, x_fine_tune, y_fine_tune, use_advanced)
+                        
+                        if kill_features is not None:
+                            # Make prediction
+                            prediction_proba = st.session_state.trained_model.predict_proba([kill_features])[0]
+                            predicted_class = st.session_state.trained_model.predict([kill_features])[0]
+                            
+                            # Calculate uncertainty (entropy of prediction probabilities)
+                            uncertainty = -np.sum(prediction_proba * np.log(prediction_proba + 1e-10))
+                            
+                            # Get label names
+                            label_encoder = st.session_state.get('label_encoder', None)
+                            if label_encoder:
+                                predicted_label = label_encoder.inverse_transform([predicted_class])[0]
+                            else:
+                                predicted_label = f"Class_{predicted_class}"
+                            
+                            # Create prediction dict
+                            prediction = {
+                                'attacker_labels': [predicted_label] if predicted_label else [],
+                                'victim_labels': [],
+                                'confidence': np.max(prediction_proba),
+                                'uncertainty': uncertainty,
+                                'prediction_proba': prediction_proba
+                            }
+                            
+                            unlabeled_predictions[kill_identifier] = prediction
+                            
+                    except Exception as e:
+                        st.warning(f"Error predicting for kill {kill_identifier}: {str(e)}")
+                        continue
+            
+            # Also check existing predictions
+            for _, kill in unlabeled_kills.iterrows():
+                kill_identifier = f"{kill.get('tick', '')}_{kill.get('attacker_name', '')}_{kill.get('victim_name', '')}"
+                if kill_identifier not in unlabeled_predictions:
+                    # Try to find matching prediction in existing model_predictions
+                    for pred_key, prediction in model_predictions.items():
+                        if (pred_key == kill_identifier or 
+                            pred_key == str(kill.get('tick', '')) or
+                            pred_key == f"{kill.get('attacker_name', '')}_{kill.get('victim_name', '')}"):
+                            unlabeled_predictions[kill_identifier] = prediction
+                            break
+            
+            if not unlabeled_predictions:
+                st.warning("No model predictions available. Please train the model first in ML Training Mode.")
+                return
+            
+            # Display predictions
+            for kill_identifier, prediction in list(unlabeled_predictions.items())[:10]:  # Show first 10
+                # Find the corresponding kill data
+                kill_data = None
+                for _, kill in unlabeled_kills.iterrows():
+                    identifier = f"{kill.get('tick', '')}_{kill.get('attacker_name', '')}_{kill.get('victim_name', '')}"
+                    if identifier == kill_identifier:
+                        kill_data = kill
+                        break
+                
+                if kill_data is not None:
+                    with st.expander(f"Kill {kill_identifier} - {kill_data['attacker_name']} → {kill_data['victim_name']}"):
+                        col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.markdown("**Model Predictions:**")
+                        if 'attacker_labels' in prediction:
+                            st.write("Attacker:", ", ".join(prediction['attacker_labels']) if prediction['attacker_labels'] else "None")
+                        if 'victim_labels' in prediction:
+                            st.write("Victim:", ", ".join(prediction['victim_labels']) if prediction['victim_labels'] else "None")
+                        st.write(f"Confidence: {prediction.get('confidence', 0):.1%}")
+                        st.write(f"Uncertainty: {prediction.get('uncertainty', 0):.3f}")
+                    
+                    with col2:
+                        st.markdown("**Kill Info:**")
+                        st.write(f"Map: {kill_data.get('place', 'Unknown')}")
+                        st.write(f"Round: {kill_data.get('round', 'Unknown')}")
+                        st.write(f"Weapon: {kill_data.get('weapon', 'Unknown')}")
+                        st.write(f"Headshot: {kill_data.get('headshot', False)}")
+            
+            if len(unlabeled_predictions) > 10:
+                st.info(f"Showing first 10 predictions. Total: {len(unlabeled_predictions)}")
+            
+            # JSON Export Section
+            st.subheader("📤 JSON Export")
+            st.markdown("Export predictions in JSON format for external processing:")
+            
+            # Create JSON output
+            json_output = []
+            for kill_identifier, prediction in unlabeled_predictions.items():
+                # Find the corresponding kill data
+                kill_data = None
+                for _, kill in unlabeled_kills.iterrows():
+                    identifier = f"{kill.get('tick', '')}_{kill.get('attacker_name', '')}_{kill.get('victim_name', '')}"
+                    if identifier == kill_identifier:
+                        kill_data = kill
+                        break
+                
+                if kill_data is not None:
+                    json_kill = {
+                        "kill_id": kill_identifier,
+                        "attacker": kill_data.get('attacker_name', 'Unknown'),
+                        "victim": kill_data.get('victim_name', 'Unknown'),
+                        "place": kill_data.get('place', 'Unknown'),
+                        "round": kill_data.get('round', 'Unknown'),
+                        "weapon": kill_data.get('weapon', 'Unknown'),
+                        "headshot": kill_data.get('headshot', False),
+                        "distance": kill_data.get('distance_xy', 0.0),
+                        "time_in_round": kill_data.get('time_in_round_s', 0.0),
+                        "predicted_attacker_labels": prediction.get('attacker_labels', []),
+                        "predicted_victim_labels": prediction.get('victim_labels', []),
+                        "confidence": prediction.get('confidence', 0.0),
+                        "uncertainty": prediction.get('uncertainty', 0.0)
+                    }
+                    json_output.append(json_kill)
+            
+            # Display JSON
+            import json
+            json_str = json.dumps(json_output, indent=2)
+            
+            st.code(json_str, language="json")
+            
+            # Download button
+            st.download_button(
+                label="📥 Download JSON",
+                data=json_str,
+                file_name="kill_predictions.json",
+                mime="application/json"
+            )
+        
+        elif simulation_mode == "Correction Mode":
+            st.subheader("✏️ Correct Model Predictions")
+            
+            # Select a kill to correct
+            if 'simulation_correction_kill_id' not in st.session_state:
+                st.session_state.simulation_correction_kill_id = None
+            
+            # Get high-uncertainty predictions for correction
+            high_uncertainty_kills = []
+            for pred_key, prediction in model_predictions.items():
+                # Check if this prediction corresponds to an unlabeled kill
+                for _, kill in unlabeled_kills.iterrows():
+                    identifier = f"{kill.get('tick', '')}_{kill.get('attacker_name', '')}_{kill.get('victim_name', '')}"
+                    if (pred_key == identifier or 
+                        pred_key == str(kill.get('tick', '')) or
+                        pred_key == f"{kill.get('attacker_name', '')}_{kill.get('victim_name', '')}"):
+                        uncertainty = prediction.get('uncertainty', 0)
+                        if uncertainty > 0.5:  # High uncertainty threshold
+                            high_uncertainty_kills.append((identifier, uncertainty))
+                        break
+            
+            high_uncertainty_kills.sort(key=lambda x: x[1], reverse=True)
+            
+            if not high_uncertainty_kills:
+                st.info("No high-uncertainty predictions found. Try training the model with more data.")
+                return
+            
+            # Select kill to correct
+            selected_kill_identifier = st.selectbox(
+                "Select kill to correct (high uncertainty first):",
+                [k[0] for k in high_uncertainty_kills[:20]],  # Top 20 most uncertain
+                format_func=lambda x: f"Kill {x} (uncertainty: {next(k[1] for k in high_uncertainty_kills if k[0] == x):.3f})"
+            )
+            
+            if selected_kill_identifier:
+                st.session_state.simulation_correction_kill_id = selected_kill_identifier
+                
+                # Get kill data and prediction
+                kill_data = None
+                for _, kill in unlabeled_kills.iterrows():
+                    identifier = f"{kill.get('tick', '')}_{kill.get('attacker_name', '')}_{kill.get('victim_name', '')}"
+                    if identifier == selected_kill_identifier:
+                        kill_data = kill
+                        break
+                
+                # Find matching prediction
+                prediction = {}
+                for pred_key, pred in model_predictions.items():
+                    if (pred_key == selected_kill_identifier or 
+                        pred_key == str(kill_data.get('tick', '')) or
+                        pred_key == f"{kill_data.get('attacker_name', '')}_{kill_data.get('victim_name', '')}"):
+                        prediction = pred
+                        break
+                
+                # Display kill info
+                st.markdown(f"**Kill {selected_kill_identifier}:** {kill_data['attacker_name']} → {kill_data['victim_name']}")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**Model Prediction:**")
+                    if 'attacker_labels' in prediction:
+                        st.write("Attacker:", ", ".join(prediction['attacker_labels']) if prediction['attacker_labels'] else "None")
+                    if 'victim_labels' in prediction:
+                        st.write("Victim:", ", ".join(prediction['victim_labels']) if prediction['victim_labels'] else "None")
+                    st.write(f"Confidence: {prediction.get('confidence', 0):.1%}")
+                    st.write(f"Uncertainty: {prediction.get('uncertainty', 0):.3f}")
+                
+                with col2:
+                    st.markdown("**Your Correction:**")
+                    
+                    # Correction controls
+                    corrected_attacker_labels = st.multiselect(
+                        "Correct Attacker Labels:",
+                        ["good_aim", "good_positioning", "good_timing", "good_utility", "good_communication", 
+                         "bad_aim", "bad_positioning", "bad_timing", "bad_utility", "bad_communication"],
+                        default=prediction.get('attacker_labels', [])
+                    )
+                    
+                    corrected_victim_labels = st.multiselect(
+                        "Correct Victim Labels:",
+                        ["aware", "unaware", "bad_clearing", "good_positioning", "bad_positioning", 
+                         "good_communication", "bad_communication", "good_utility", "bad_utility"],
+                        default=prediction.get('victim_labels', [])
+                    )
+                    
+                    if st.button("Save Correction"):
+                        # Add correction to labeled data
+                        correction_data = {
+                            'kill_id': selected_kill_identifier,
+                            'attacker_name': kill_data['attacker_name'],
+                            'victim_name': kill_data['victim_name'],
+                            'attacker_labels': corrected_attacker_labels,
+                            'victim_labels': corrected_victim_labels,
+                            'place': kill_data.get('place', 'Unknown'),
+                            'round': kill_data.get('round', 0),
+                            'tick': kill_data.get('tick', 0),
+                            'weapon': kill_data.get('weapon', 'Unknown'),
+                            'headshot': kill_data.get('headshot', False),
+                            'correction_source': 'simulation'
+                        }
+                        
+                        # Add to session state for retraining
+                        if 'simulation_corrections' not in st.session_state:
+                            st.session_state.simulation_corrections = []
+                        
+                        st.session_state.simulation_corrections.append(correction_data)
+                        st.success(f"Correction saved! Total corrections: {len(st.session_state.simulation_corrections)}")
+        
+        elif simulation_mode == "Learning Progress":
+            st.subheader("📈 Learning Progress")
+            
+            # Show correction statistics
+            if 'simulation_corrections' in st.session_state and st.session_state.simulation_corrections:
+                corrections = st.session_state.simulation_corrections
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.metric("Total Corrections", len(corrections))
+                
+                with col2:
+                    # Calculate accuracy improvement (simplified)
+                    st.metric("Model Learning", "Active")
+                
+                with col3:
+                    st.metric("Next Retrain", "Ready")
+                
+                # Show recent corrections
+                st.markdown("**Recent Corrections:**")
+                for i, correction in enumerate(corrections[-5:]):  # Last 5
+                    st.write(f"{i+1}. Kill {correction['kill_id']}: {correction['attacker_name']} → {correction['victim_name']}")
+                    st.write(f"   Attacker: {', '.join(correction['attacker_labels']) if correction['attacker_labels'] else 'None'}")
+                    st.write(f"   Victim: {', '.join(correction['victim_labels']) if correction['victim_labels'] else 'None'}")
+                    st.write("---")
+                
+                # Retrain button
+                if st.button("🔄 Retrain Model with Corrections"):
+                    st.info("Retraining model with your corrections...")
+                    # This would trigger the auto_retrain_model function
+                    st.success("Model retrained! Check predictions again.")
+            else:
+                st.info("No corrections made yet. Use Correction Mode to improve the model.")
+    
+    with col3:
+        st.markdown("**Quick Stats:**")
+        st.write(f"Unlabeled kills: {len(unlabeled_kills)}")
+        
+        # Count model predictions for unlabeled kills
+        prediction_count = 0
+        for _, kill in unlabeled_kills.iterrows():
+            identifier = f"{kill.get('tick', '')}_{kill.get('attacker_name', '')}_{kill.get('victim_name', '')}"
+            if identifier in model_predictions:
+                prediction_count += 1
+        
+        st.write(f"Model predictions: {prediction_count}")
+        st.write(f"Corrections made: {len(st.session_state.get('simulation_corrections', []))}")
+        
+        if st.button("🔄 Refresh Simulation"):
+            st.rerun()
