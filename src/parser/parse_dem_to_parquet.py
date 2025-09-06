@@ -294,10 +294,24 @@ def parse_single_demo(demo_path: Path, output_dir: Path, partition_rounds: bool 
                 logger.warning(f"Table {table_name} not available in this AWPy version")
                 saved_data[table_name] = None
         
+        # Debug: Check what's in the demo header
+        demo_header = getattr(demo, 'header', {})
+        print(f"DEBUG: Demo header keys: {list(demo_header.keys()) if demo_header else 'No header'}")
+        print(f"DEBUG: Demo header content: {demo_header}")
+        
+        # Try different possible map name fields
+        map_name = 'unknown'
+        if demo_header:
+            for key in ['map_name', 'mapName', 'map', 'Map', 'mapname']:
+                if key in demo_header:
+                    map_name = demo_header[key]
+                    print(f"DEBUG: Found map name '{map_name}' in header field '{key}'")
+                    break
+        
         # Save metadata
         meta_data = {
             'demo_file': str(demo_path),
-            'map': getattr(demo, 'header', {}).get('map_name', 'unknown'),
+            'map': map_name,
             'saved': saved_data,
             'awpy_attributes': get_awpy_attributes(demo)
         }
@@ -306,6 +320,10 @@ def parse_single_demo(demo_path: Path, output_dir: Path, partition_rounds: bool 
         safe_save_json(meta_data, meta_filepath)
         
         logger.info(f"Successfully parsed {demo_path}")
+        
+        # Add map name to saved_data for easy access
+        saved_data['map'] = meta_data['map']
+        
         return saved_data
         
     except ImportError:

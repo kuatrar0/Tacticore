@@ -384,6 +384,10 @@ def process_demo_file(demo_path: str) -> Dict:
             # Get tickrate (default to 64)
             data['tickrate'] = 64
             
+            # Include the map name from saved_data
+            data['map'] = saved_data.get('map', 'unknown')
+            print(f"DEBUG: Including map name in data: {data['map']}")
+            
             return data
             
     except Exception as e:
@@ -441,7 +445,10 @@ async def analyze_demo(demo_file: UploadFile = File(...)):
             tmp_path = tmp_file.name
         
         # Process demo file
+        print(f"DEBUG: Processing demo file: {tmp_path}")
         result = process_demo_file(tmp_path)
+        print(f"DEBUG: Process result keys: {list(result.keys())}")
+        print(f"DEBUG: Process result map: {result.get('map', 'NOT_FOUND')}")
         
         # Extract data
         kills_df = result.get('kills_df')
@@ -527,11 +534,16 @@ async def analyze_demo(demo_file: UploadFile = File(...)):
         # Clean up
         os.unlink(tmp_path)
         
+        # Get the actual map name from the demo parsing result
+        actual_map_name = result.get('map', 'Unknown')
+        print(f"DEBUG: Map name from demo parsing: '{actual_map_name}'")
+        print(f"DEBUG: Result keys: {list(result.keys())}")
+        
         # Convert final response to ensure all values are JSON serializable
         response_data = {
             "status": "success",
             "total_kills": len(predictions),
-            "map": str(map_data.get('name', 'Unknown')),
+            "map": str(actual_map_name),
             "tickrate": int(tickrate),
             "predictions": predictions
         }

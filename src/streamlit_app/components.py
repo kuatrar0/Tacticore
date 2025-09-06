@@ -13,6 +13,7 @@ from PIL import Image
 import io
 import base64
 import random
+from datetime import datetime
 from sklearn.preprocessing import LabelEncoder
 
 
@@ -287,15 +288,18 @@ def create_map_figure(map_image_path: str, map_data: Dict,
         attacker_x, attacker_y = clamp_coords(attacker_pos[0], attacker_pos[1])
         victim_x, victim_y = clamp_coords(victim_pos[0], victim_pos[1])
         
-        # Plot attacker (blue)
+        # Plot attacker (blue) - simpler circle
         ax.scatter(attacker_x, attacker_y, 
-                  c='blue', s=150, alpha=0.9, 
-                  edgecolors='white', linewidth=3, label=attacker_name, zorder=10)
+                  c='blue', s=80, alpha=0.8, 
+                  edgecolors='white', linewidth=2, label=attacker_name, zorder=10)
         
-        # Plot victim (red)
+        # Plot victim (red) - simpler circle
         ax.scatter(victim_x, victim_y, 
-                  c='red', s=150, alpha=0.9,
-                  edgecolors='white', linewidth=3, label=victim_name, zorder=10)
+                  c='red', s=80, alpha=0.8,
+                  edgecolors='white', linewidth=2, label=victim_name, zorder=10)
+        
+        # Note: Directional triangles removed due to positioning issues
+        # Keeping the improved smaller circles for better visibility
         
         # Add smaller labels with player names
         ax.annotate(attacker_name, (attacker_x, attacker_y), 
@@ -770,101 +774,362 @@ def create_file_uploaders() -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFra
 
 def create_labeled_data_importer() -> None:
     """
-    Create widget to import existing labeled CSV data.
+    Create widget to import existing labeled CSV data with incremental support.
     """
-    st.sidebar.markdown("### 📥 Import Existing Labels")
+    st.sidebar.markdown("### 📥 Label Management")
     
-    labeled_csv = st.sidebar.file_uploader(
-        "Upload existing labeled data (features_labeled_context.csv)",
-        type=['csv'],
-        key="labeled_csv_upload"
-    )
+    # Show current labeled data status
+    current_count = len(st.session_state.labeled_data)
+    st.sidebar.info(f"📊 **Current labeled kills:** {current_count}")
     
-    if labeled_csv is not None:
-        try:
-            # Read the CSV
-            labeled_df = pd.read_csv(labeled_csv)
-            st.sidebar.success(f"Loaded {len(labeled_df)} labeled kills")
-            
-            # Convert to the format expected by the app
-            imported_labels = []
-            for _, row in labeled_df.iterrows():
-                # Extract attacker and victim labels
-                attacker_labels = []
-                victim_labels = []
+    # Create tabs for different operations
+    tab1, tab2, tab3, tab4 = st.sidebar.tabs(["📥 Import", "➕ Add", "🔄 Merge", "🗑️ Manage"])
+    
+    with tab1:
+        st.markdown("**Import New Labels**")
+        labeled_csv = st.file_uploader(
+            "Upload labeled data (CSV)",
+            type=['csv'],
+            key="labeled_csv_upload"
+        )
+        
+        if labeled_csv is not None:
+            try:
+                # Read the CSV
+                labeled_df = pd.read_csv(labeled_csv)
+                st.success(f"📁 Loaded {len(labeled_df)} kills from CSV")
                 
-                # Handle different possible column names
-                if 'attacker_label' in row:
-                    if pd.notna(row['attacker_label']) and row['attacker_label']:
-                        attacker_labels = [label.strip() for label in str(row['attacker_label']).split(',')]
+                # Show preview
+                st.markdown("**CSV Preview:**")
+                st.dataframe(labeled_df.head(), use_container_width=True)
                 
-                if 'victim_label' in row:
-                    if pd.notna(row['victim_label']) and row['victim_label']:
-                        victim_labels = [label.strip() for label in str(row['victim_label']).split(',')]
+                # Import options
+                import_mode = st.radio(
+                    "Import Mode:",
+                    ["🆕 Add New Only (Skip Duplicates)", "🔄 Replace All Labels", "🔄 Merge & Update Existing"],
+                    index=0
+                )
                 
-                # Also check for individual label columns
-                for col in row.index:
-                    if col.startswith('attacker_') and col != 'attacker_label' and col != 'attacker_name':
-                        if pd.notna(row[col]) and row[col] == 1:
-                            label = col.replace('attacker_', '')
-                            if label not in attacker_labels:
-                                attacker_labels.append(label)
+                if st.button("✅ Import Labels", type="primary"):
+                    imported_labels = []
+                    skipped_count = 0
+                    updated_count = 0
+                    new_count = 0
                     
-                    if col.startswith('victim_') and col != 'victim_label' and col != 'victim_name':
-                        if pd.notna(row[col]) and row[col] == 1:
-                            label = col.replace('victim_', '')
-                            if label not in victim_labels:
-                                victim_labels.append(label)
-                
-                # Create labeled kill entry
-                labeled_kill = {
-                    'attacker_name': row.get('attacker_name', 'Unknown'),
-                    'victim_name': row.get('victim_name', 'Unknown'),
-                    'kill_tick': row.get('tick', row.get('kill_tick', 0)),
-                    'attacker_labels': attacker_labels,
-                    'victim_labels': victim_labels,
-                    'attacker_label': ', '.join(attacker_labels),
-                    'victim_label': ', '.join(victim_labels),
-                    # Add other context data if available
-                    'distance_xy': row.get('distance_xy', 0),
-                    'time_in_round_s': row.get('time_in_round_s', 0),
-                    'headshot': row.get('headshot', False),
-                    'place': row.get('place', row.get('attacker_place', 'Unknown')),
-                    'side': row.get('side', row.get('attacker_side', 'Unknown')),
-                }
-                
-                imported_labels.append(labeled_kill)
+                    for _, row in labeled_df.iterrows():
+                        # Extract attacker and victim labels
+                        attacker_labels = []
+                        victim_labels = []
+                        
+                        # Handle different possible column names
+                        if 'attacker_label' in row:
+                            if pd.notna(row['attacker_label']) and row['attacker_label']:
+                                attacker_labels = [label.strip() for label in str(row['attacker_label']).split(',')]
+                        
+                        if 'victim_label' in row:
+                            if pd.notna(row['victim_label']) and row['victim_label']:
+                                victim_labels = [label.strip() for label in str(row['victim_label']).split(',')]
+                        
+                        # Also check for individual label columns
+                        for col in row.index:
+                            if col.startswith('attacker_') and col != 'attacker_label' and col != 'attacker_name':
+                                if pd.notna(row[col]) and row[col] == 1:
+                                    label = col.replace('attacker_', '')
+                                    if label not in attacker_labels:
+                                        attacker_labels.append(label)
+                            
+                            if col.startswith('victim_') and col != 'victim_label' and col != 'victim_name':
+                                if pd.notna(row[col]) and row[col] == 1:
+                                    label = col.replace('victim_', '')
+                                    if label not in victim_labels:
+                                        victim_labels.append(label)
+                        
+                        # Create labeled kill entry
+                        labeled_kill = {
+                            'attacker_name': row.get('attacker_name', 'Unknown'),
+                            'victim_name': row.get('victim_name', 'Unknown'),
+                            'kill_tick': row.get('tick', row.get('kill_tick', 0)),
+                            'attacker_labels': attacker_labels,
+                            'victim_labels': victim_labels,
+                            'attacker_label': ', '.join(attacker_labels),
+                            'victim_label': ', '.join(victim_labels),
+                            # Add other context data if available
+                            'distance_xy': row.get('distance_xy', 0),
+                            'time_in_round_s': row.get('time_in_round_s', 0),
+                            'headshot': row.get('headshot', False),
+                            'place': row.get('place', row.get('attacker_place', 'Unknown')),
+                            'side': row.get('side', row.get('attacker_side', 'Unknown')),
+                            'round': row.get('round', row.get('round_number', 0)),
+                            'weapon': row.get('weapon', 'Unknown'),
+                            'map': row.get('map', 'Unknown'),
+                            'source_file': labeled_csv.name,  # Track source
+                            'import_timestamp': datetime.now().isoformat()
+                        }
+                        
+                        # Check for duplicates based on unique identifier
+                        duplicate_found = False
+                        existing_index = None
+                        
+                        for i, existing in enumerate(st.session_state.labeled_data):
+                            if (existing.get('kill_tick') == labeled_kill['kill_tick'] and
+                                existing.get('attacker_name') == labeled_kill['attacker_name'] and
+                                existing.get('victim_name') == labeled_kill['victim_name']):
+                                duplicate_found = True
+                                existing_index = i
+                                break
+                        
+                        if import_mode == "🆕 Add New Only (Skip Duplicates)":
+                            if not duplicate_found:
+                                imported_labels.append(labeled_kill)
+                                new_count += 1
+                            else:
+                                skipped_count += 1
+                        
+                        elif import_mode == "🔄 Replace All Labels":
+                            imported_labels.append(labeled_kill)
+                            new_count += 1
+                        
+                        elif import_mode == "🔄 Merge & Update Existing":
+                            if duplicate_found:
+                                # Update existing with new data
+                                st.session_state.labeled_data[existing_index].update(labeled_kill)
+                                updated_count += 1
+                            else:
+                                imported_labels.append(labeled_kill)
+                                new_count += 1
+                    
+                    # Apply the import based on mode
+                    if import_mode == "🔄 Replace All Labels":
+                        st.session_state.labeled_data = imported_labels
+                        st.success(f"✅ **Replaced all labels:** {len(imported_labels)} kills")
+                    else:
+                        # Add new labels to existing ones
+                        st.session_state.labeled_data.extend(imported_labels)
+                        st.success(f"✅ **Import complete:** {new_count} new, {updated_count} updated, {skipped_count} skipped")
+                    
+                    # Show final summary
+                    final_count = len(st.session_state.labeled_data)
+                    st.info(f"📊 **Total labeled kills:** {final_count}")
+                    
+                    # Show label distribution
+                    show_label_distribution(st.session_state.labeled_data)
+                    
+            except Exception as e:
+                st.error(f"❌ Error importing labeled data: {str(e)}")
+                st.info("Make sure your CSV has the expected columns (attacker_name, victim_name, tick, attacker_label, victim_label, etc.)")
+    
+    with tab2:
+        st.markdown("**Add Individual Labels**")
+        
+        # Quick add form
+        with st.form("quick_add_label"):
+            col1, col2 = st.columns(2)
             
-            # Store in session state
-            if imported_labels:
-                st.session_state.labeled_data = imported_labels
-                st.sidebar.success(f"✅ Imported {len(imported_labels)} labeled kills!")
-                st.sidebar.info("Your existing labels are now loaded and ready for active learning!")
+            with col1:
+                attacker_name = st.text_input("Attacker Name", key="quick_attacker")
+                victim_name = st.text_input("Victim Name", key="quick_victim")
+                kill_tick = st.number_input("Kill Tick", min_value=0, key="quick_tick")
+            
+            with col2:
+                attacker_labels = st.multiselect(
+                    "Attacker Labels",
+                    ["precise", "good_positioning", "bad_positioning", "good_utility_usage", 
+                     "bad_utility_usage", "good_peek", "bad_peek", "clutch_play", "choke", "entry_frag"],
+                    key="quick_attacker_labels"
+                )
+                victim_labels = st.multiselect(
+                    "Victim Labels", 
+                    ["exposed", "no_cover", "good_position", "mistake", "bad_clearing"],
+                    key="quick_victim_labels"
+                )
+            
+            if st.form_submit_button("➕ Add Label"):
+                if attacker_name and victim_name and attacker_labels:
+                    new_label = {
+                        'attacker_name': attacker_name,
+                        'victim_name': victim_name,
+                        'kill_tick': kill_tick,
+                        'attacker_labels': attacker_labels,
+                        'victim_labels': victim_labels,
+                        'attacker_label': ', '.join(attacker_labels),
+                        'victim_label': ', '.join(victim_labels),
+                        'source_file': 'manual_entry',
+                        'import_timestamp': datetime.now().isoformat()
+                    }
+                    
+                    st.session_state.labeled_data.append(new_label)
+                    st.success(f"✅ Added label for {attacker_name} → {victim_name}")
+                    st.rerun()
+                else:
+                    st.warning("Please fill in attacker name and at least one attacker label")
+    
+    with tab3:
+        st.markdown("**Merge Multiple Files**")
+        
+        merge_files = st.file_uploader(
+            "Upload multiple CSV files to merge",
+            type=['csv'],
+            accept_multiple_files=True,
+            key="merge_files_upload"
+        )
+        
+        if merge_files:
+            st.info(f"📁 **Files to merge:** {len(merge_files)}")
+            
+            if st.button("🔄 Merge All Files", type="primary"):
+                total_merged = 0
+                duplicates_found = 0
                 
+                for file in merge_files:
+                    try:
+                        df = pd.read_csv(file)
+                        file_merged = 0
+                        
+                        for _, row in df.iterrows():
+                            # Extract labels (same logic as above)
+                            attacker_labels = []
+                            victim_labels = []
+                            
+                            if 'attacker_label' in row and pd.notna(row['attacker_label']):
+                                attacker_labels = [label.strip() for label in str(row['attacker_label']).split(',')]
+                            
+                            if 'victim_label' in row and pd.notna(row['victim_label']):
+                                victim_labels = [label.strip() for label in str(row['victim_label']).split(',')]
+                            
+                            # Check for duplicates
+                            duplicate = False
+                            for existing in st.session_state.labeled_data:
+                                if (existing.get('kill_tick') == row.get('tick', 0) and
+                                    existing.get('attacker_name') == row.get('attacker_name') and
+                                    existing.get('victim_name') == row.get('victim_name')):
+                                    duplicate = True
+                                    break
+                            
+                            if not duplicate:
+                                new_label = {
+                                    'attacker_name': row.get('attacker_name', 'Unknown'),
+                                    'victim_name': row.get('victim_name', 'Unknown'),
+                                    'kill_tick': row.get('tick', row.get('kill_tick', 0)),
+                                    'attacker_labels': attacker_labels,
+                                    'victim_labels': victim_labels,
+                                    'attacker_label': ', '.join(attacker_labels),
+                                    'victim_label': ', '.join(victim_labels),
+                                                                    'source_file': file.name,
+                                'import_timestamp': datetime.now().isoformat()
+                                }
+                                st.session_state.labeled_data.append(new_label)
+                                file_merged += 1
+                                total_merged += 1
+                            else:
+                                duplicates_found += 1
+                        
+                        st.success(f"✅ {file.name}: {file_merged} new labels")
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error processing {file.name}: {str(e)}")
+                
+                st.success(f"🎉 **Merge complete:** {total_merged} new labels, {duplicates_found} duplicates skipped")
+                st.info(f"📊 **Total labeled kills:** {len(st.session_state.labeled_data)}")
+    
+    with tab4:
+        st.markdown("**Manage Existing Labels**")
+        
+        if st.session_state.labeled_data:
+            # Show statistics
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.metric("Total Labels", len(st.session_state.labeled_data))
+                
+                # Count by source
+                sources = {}
+                for label in st.session_state.labeled_data:
+                    source = label.get('source_file', 'unknown')
+                    sources[source] = sources.get(source, 0) + 1
+                
+                st.markdown("**By Source:**")
+                for source, count in sources.items():
+                    st.write(f"- {source}: {count}")
+            
+            with col2:
                 # Show label distribution
-                st.sidebar.markdown("**Imported Label Distribution:**")
-                attacker_counts = {}
-                victim_counts = {}
-                
-                for kill in imported_labels:
-                    for label in kill.get('attacker_labels', []):
-                        attacker_counts[label] = attacker_counts.get(label, 0) + 1
-                    for label in kill.get('victim_labels', []):
-                        victim_counts[label] = victim_counts.get(label, 0) + 1
-                
-                if attacker_counts:
-                    st.sidebar.markdown("**Attacker Labels:**")
-                    for label, count in attacker_counts.items():
-                        st.sidebar.markdown(f"- {label}: {count}")
-                
-                if victim_counts:
-                    st.sidebar.markdown("**Victim Labels:**")
-                    for label, count in victim_counts.items():
-                        st.sidebar.markdown(f"- {label}: {count}")
+                show_label_distribution(st.session_state.labeled_data)
             
-        except Exception as e:
-            st.sidebar.error(f"Error importing labeled data: {str(e)}")
-            st.sidebar.info("Make sure your CSV has the expected columns (attacker_name, victim_name, tick, attacker_label, victim_label, etc.)")
+            # Export current labels
+            if st.button("📥 Export Current Labels", type="secondary"):
+                export_data = []
+                for label in st.session_state.labeled_data:
+                    export_data.append({
+                        'attacker_name': label.get('attacker_name'),
+                        'victim_name': label.get('victim_name'),
+                        'tick': label.get('kill_tick'),
+                        'attacker_label': label.get('attacker_label'),
+                        'victim_label': label.get('victim_label'),
+                        'distance_xy': label.get('distance_xy', 0),
+                        'time_in_round_s': label.get('time_in_round_s', 0),
+                        'headshot': label.get('headshot', False),
+                        'place': label.get('place', 'Unknown'),
+                        'round': label.get('round', 0),
+                        'weapon': label.get('weapon', 'Unknown'),
+                        'source_file': label.get('source_file', 'unknown'),
+                        'import_timestamp': label.get('import_timestamp', '')
+                    })
+                
+                df = pd.DataFrame(export_data)
+                csv = df.to_csv(index=False)
+                st.download_button(
+                    label="💾 Download CSV",
+                    data=csv,
+                    file_name=f"tacticore_labels_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
+            
+            # Clear labels by source
+            if sources:
+                st.markdown("**Clear by Source:**")
+                for source in sources.keys():
+                    if st.button(f"🗑️ Clear {source}", key=f"clear_{source}"):
+                        st.session_state.labeled_data = [
+                            label for label in st.session_state.labeled_data 
+                            if label.get('source_file') != source
+                        ]
+                        st.success(f"✅ Cleared {sources[source]} labels from {source}")
+                        st.rerun()
+            
+            # Clear all labels
+            if st.button("🗑️ Clear All Labels", type="secondary"):
+                st.session_state.labeled_data = []
+                st.success("✅ All labels cleared")
+                st.rerun()
+        else:
+            st.info("📊 No labeled data to manage")
+
+
+def show_label_distribution(labeled_data: List[Dict]) -> None:
+    """Show distribution of labels in the data."""
+    if not labeled_data:
+        return
+    
+    # Count labels
+    attacker_counts = {}
+    victim_counts = {}
+    
+    for kill in labeled_data:
+        for label in kill.get('attacker_labels', []):
+            attacker_counts[label] = attacker_counts.get(label, 0) + 1
+        for label in kill.get('victim_labels', []):
+            victim_counts[label] = victim_counts.get(label, 0) + 1
+    
+    # Display in sidebar
+    if attacker_counts:
+        st.sidebar.markdown("**Attacker Labels:**")
+        for label, count in sorted(attacker_counts.items()):
+            st.sidebar.markdown(f"- {label}: {count}")
+    
+    if victim_counts:
+        st.sidebar.markdown("**Victim Labels:**")
+        for label, count in sorted(victim_counts.items()):
+            st.sidebar.markdown(f"- {label}: {count}")
 
 
 def create_map_settings() -> Tuple[str, str, int, float]:
@@ -893,14 +1158,14 @@ def create_map_settings() -> Tuple[str, str, int, float]:
     # Map image path
     map_image_path = st.text_input(
         "Map Image Path",
-        value=f"maps/{selected_map}.png",
+        value=f"../../maps/{selected_map}.png",
         key="map_image_path"
     )
     
     # Map data path
     map_data_path = st.text_input(
         "Map Data Path",
-        value="maps/map-data.json",
+        value="../../maps/map-data.json",
         key="map_data_path"
     )
     
@@ -2197,6 +2462,16 @@ def create_live_labeling_feedback() -> None:
         session_start_count = st.session_state.session_start_labeled_count
         new_labels_this_session = current_count - session_start_count
         
+        # Track changes since last display
+        if 'last_displayed_count' not in st.session_state:
+            st.session_state.last_displayed_count = current_count
+        
+        last_displayed = st.session_state.last_displayed_count
+        newly_added = current_count - last_displayed
+        
+        # Update the last displayed count
+        st.session_state.last_displayed_count = current_count
+        
         # Progress bar
         if 'total_kills_estimate' in st.session_state:
             total_estimate = st.session_state.total_kills_estimate
@@ -2210,54 +2485,93 @@ def create_live_labeling_feedback() -> None:
         if new_labels_this_session > 0:
             st.success(f"🆕 **Added {new_labels_this_session} new label(s) in this session!**")
         
+        # Show newly added since last display
+        if newly_added > 0:
+            st.info(f"✨ **Just added:** {newly_added} new label(s)")
+        
+        # Show source breakdown
+        sources = {}
+        for label in st.session_state.labeled_data:
+            source = label.get('source_file', 'unknown')
+            sources[source] = sources.get(source, 0) + 1
+        
+        if len(sources) > 1:
+            st.markdown("**📁 Sources:**")
+            for source, count in sources.items():
+                st.write(f"- {source}: {count} labels")
+        
         # Recent labels (last 5)
         if current_count > 0:
-            st.markdown("**📝 Recent Labels:**")
+            st.markdown("**🕒 Recent Labels:**")
             recent_labels = st.session_state.labeled_data[-5:]  # Last 5
             
-            for i, labeled_kill in enumerate(reversed(recent_labels)):
-                attacker_name = labeled_kill.get('attacker_name', 'Unknown')
-                victim_name = labeled_kill.get('victim_name', 'Unknown')
-                attacker_labels = labeled_kill.get('attacker_labels', [])
-                victim_labels = labeled_kill.get('victim_labels', [])
+            for i, label in enumerate(reversed(recent_labels)):
+                attacker_labels = ', '.join(label.get('attacker_labels', []))
+                victim_labels = ', '.join(label.get('victim_labels', []))
+                source = label.get('source_file', 'unknown')
                 
-                st.write(f"**{current_count - i}.** {attacker_name} → {victim_name}")
-                if attacker_labels:
-                    st.write(f"   Attacker: {', '.join(attacker_labels)}")
-                if victim_labels:
-                    st.write(f"   Victim: {', '.join(victim_labels)}")
+                st.write(f"{current_count - i}. **{label.get('attacker_name', 'Unknown')}** → **{label.get('victim_name', 'Unknown')}**")
+                st.write(f"   🎯 Attacker: {attacker_labels}")
+                st.write(f"   🎯 Victim: {victim_labels}")
+                st.write(f"   📁 Source: {source}")
+                st.write("---")
         
         # Quick stats
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            # Count unique attackers
-            attackers = set()
-            for kill in st.session_state.labeled_data:
-                attackers.add(kill.get('attacker_name', 'Unknown'))
-            st.metric("Unique Attackers", len(attackers))
+            st.metric("Total Labels", current_count)
         
         with col2:
-            # Count unique victims
-            victims = set()
-            for kill in st.session_state.labeled_data:
-                victims.add(kill.get('victim_name', 'Unknown'))
-            st.metric("Unique Victims", len(victims))
+            st.metric("Session Progress", f"+{new_labels_this_session}")
         
         with col3:
-            # Most common label
-            all_labels = []
-            for kill in st.session_state.labeled_data:
-                all_labels.extend(kill.get('attacker_labels', []))
-                all_labels.extend(kill.get('victim_labels', []))
-            
-            if all_labels:
-                from collections import Counter
-                label_counts = Counter(all_labels)
-                most_common = label_counts.most_common(1)[0]
-                st.metric("Most Common Label", f"{most_common[0]} ({most_common[1]})")
+            if 'total_kills_estimate' in st.session_state:
+                total_estimate = st.session_state.total_kills_estimate
+                remaining = max(0, total_estimate - current_count)
+                st.metric("Remaining", remaining)
             else:
-                st.metric("Most Common Label", "None")
+                st.metric("Sources", len(sources))
+        
+        # Show label distribution
+        if current_count > 0:
+            st.markdown("**📊 Label Distribution:**")
+            
+            # Count labels
+            attacker_counts = {}
+            victim_counts = {}
+            
+            for kill in st.session_state.labeled_data:
+                for label in kill.get('attacker_labels', []):
+                    attacker_counts[label] = attacker_counts.get(label, 0) + 1
+                for label in kill.get('victim_labels', []):
+                    victim_counts[label] = victim_counts.get(label, 0) + 1
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if attacker_counts:
+                    st.markdown("**Attacker Labels:**")
+                    for label, count in sorted(attacker_counts.items()):
+                        st.write(f"- {label}: {count}")
+            
+            with col2:
+                if victim_counts:
+                    st.markdown("**Victim Labels:**")
+                    for label, count in sorted(victim_counts.items()):
+                        st.write(f"- {label}: {count}")
+    else:
+        st.markdown("### 📊 Live Labeling Progress")
+        st.info("📊 **No labeled data yet.** Start labeling kills to see the progress here!")
+        
+        # Show instructions
+        st.markdown("""
+        **To get started:**
+        1. **Upload your demo data** (kills.parquet, ticks.parquet)
+        2. **Import existing labels** (if you have any)
+        3. **Start labeling kills** in Single Kill or Batch Mode
+        4. **Watch your progress** grow here!
+        """)
 
 
 def create_enhanced_active_learning_navigation(current_index: int, total_kills: int, is_active_learning: bool) -> None:
@@ -2718,3 +3032,99 @@ def create_model_simulation_mode(
         
         if st.button("🔄 Refresh Simulation"):
             st.rerun()
+
+
+def show_incremental_training_guide() -> None:
+    """
+    Show a guide for continuing to train the model with new labels.
+    """
+    st.markdown("---")
+    st.markdown("## 🚀 **How to Continue Training Your Model**")
+    
+    st.markdown("""
+    ### **Current Status:**
+    - ✅ You have a trained model with your existing labels
+    - ✅ Backend is working and predictions are successful
+    - ✅ Ready to add more labels and improve the model
+    
+    ### **Step-by-Step Process:**
+    
+    #### **1. Add New Labels (Choose Your Method)**
+    
+    **📥 Import New CSV Files:**
+    - Go to sidebar → **"Label Management"** → **"📥 Import"** tab
+    - Upload your new labeled CSV files
+    - Choose **"🆕 Add New Only (Skip Duplicates)"** mode
+    - Click **"✅ Import Labels"**
+    
+    **➕ Manual Entry:**
+    - Go to sidebar → **"Label Management"** → **"➕ Add"** tab
+    - Fill in the quick form for individual kills
+    - Click **"➕ Add Label"**
+    
+    **🔄 Merge Multiple Files:**
+    - Go to sidebar → **"Label Management"** → **"🔄 Merge"** tab
+    - Upload multiple CSV files at once
+    - Click **"🔄 Merge All Files"**
+    
+    #### **2. Train the Model**
+    
+    - Go to **"ML Training Mode"** in the main app
+    - Click **"🔄 Train Model & Generate Suggestions"**
+    - Watch the training progress in the sidebar
+    - See new label distribution and feature availability
+    
+    #### **3. Monitor Progress**
+    
+    - **Live Progress**: See real-time updates in the main area
+    - **Source Tracking**: Know where each label came from
+    - **Label Distribution**: See how your labels are balanced
+    - **Model Accuracy**: Track improvements over time
+    
+    ### **Best Practices:**
+    
+    **🎯 Label Diversity:**
+    - Add labels from **different maps** (de_mirage, de_dust2, etc.)
+    - Include **various situations** (eco rounds, full buys, clutches)
+    - Cover **different skill levels** and playstyles
+    
+    **📊 Quality Over Quantity:**
+    - **Accurate labels** are better than many uncertain ones
+    - **Consistent labeling** across similar situations
+    - **Regular retraining** after adding 20-50 new labels
+    
+    **🔄 Incremental Approach:**
+    - Start with **small batches** (10-20 new labels)
+    - **Retrain and test** after each batch
+    - **Export your progress** regularly as backup
+    
+    ### **What Happens Automatically:**
+    
+    ✅ **New labels** → Automatically added to your dataset  
+    ✅ **Feature extraction** → Adapts to new data structure  
+    ✅ **Model retraining** → Uses all available data  
+    ✅ **Uncertainty calculation** → Recalculated for new predictions  
+    ✅ **Model saving** → Automatically saved to backend  
+    ✅ **Duplicate prevention** → Smart merging and updating  
+    
+    ### **Troubleshooting:**
+    
+    **If labels don't appear:**
+    - Check the **"Label Management"** sidebar for current count
+    - Use **"🗑️ Manage"** tab to see all sources
+    - Ensure you're in the right import mode
+    
+    **If training fails:**
+    - Make sure you have **at least 10 labeled kills**
+    - Check that **feature consistency** across your data
+    - Verify **label format** matches existing structure
+    
+    ### **Next Steps:**
+    
+    1. **Start with your new labels** using any method above
+    2. **Train the model** to see improvements
+    3. **Test predictions** on new demo files
+    4. **Repeat the process** to continuously improve
+    
+    **🎯 Your model will get better with each new label!**
+    """)

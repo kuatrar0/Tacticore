@@ -17,16 +17,16 @@ from typing import Dict, List, Optional, Tuple
 # Add src to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
 
-from streamlit_app.components import (
+from components import (
     create_filters, apply_filters, create_label_controls, create_map_figure,
     display_kill_info, create_navigation_controls, display_labeled_summary,
     create_export_button, create_file_uploaders, create_map_settings,
     create_batch_labeling_controls, create_ml_training_controls, create_labeled_data_importer,
     auto_retrain_model, create_active_learning_navigation, create_labeled_data_display,
     display_model_predictions, create_live_labeling_feedback, create_enhanced_active_learning_navigation,
-    create_model_simulation_mode
+    create_model_simulation_mode, show_incremental_training_guide
 )
-from streamlit_app.transforms import (
+from transforms import (
     load_map_data, get_enhanced_kill_context
 )
 
@@ -459,6 +459,29 @@ def main():
             # Display enhanced kill information
             display_kill_info(kill_context)
             
+            # Debug: Show unique player names to help identify underscore issue
+            if st.checkbox("🔍 Debug: Show Player Names", value=False):
+                st.write("**All unique attacker names:**")
+                if 'kills_df' in st.session_state and not st.session_state.kills_df.empty:
+                    attacker_names = st.session_state.kills_df['attacker_name'].unique()
+                    st.write(attacker_names)
+                    # Check specifically for underscore names
+                    underscore_attackers = [name for name in attacker_names if str(name).startswith('_')]
+                    if underscore_attackers:
+                        st.write(f"**Names starting with underscore:** {underscore_attackers}")
+                    else:
+                        st.write("**No names starting with underscore found**")
+                st.write("**All unique victim names:**")
+                if 'kills_df' in st.session_state and not st.session_state.kills_df.empty:
+                    victim_names = st.session_state.kills_df['victim_name'].unique()
+                    st.write(victim_names)
+                    # Check specifically for underscore names
+                    underscore_victims = [name for name in victim_names if str(name).startswith('_')]
+                    if underscore_victims:
+                        st.write(f"**Names starting with underscore:** {underscore_victims}")
+                    else:
+                        st.write("**No names starting with underscore found**")
+            
             # Display model predictions
             display_model_predictions(kill_context, current_index, filtered_kills)
             
@@ -637,6 +660,10 @@ def main():
     # Bottom section - Enhanced labeled data display
     create_live_labeling_feedback()
     create_labeled_data_display()
+    
+    # Show incremental training guide if user has labeled data
+    if st.session_state.labeled_data and len(st.session_state.labeled_data) > 0:
+        show_incremental_training_guide()
     
     # Instructions
     with st.expander("📖 Instructions"):

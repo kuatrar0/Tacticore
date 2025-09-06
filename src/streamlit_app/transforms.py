@@ -468,10 +468,14 @@ def find_nearby_utility(kill_tick: int, kill_x: float, kill_y: float,
         }
     
     # Calculate distances - AWPy uses uppercase X, Y for coordinates
+    # Get X and Y columns (try both uppercase and lowercase)
+    x_col = 'X' if 'X' in nearby_grenades.columns else 'x'
+    y_col = 'Y' if 'Y' in nearby_grenades.columns else 'y'
+    
     nearby_grenades['distance'] = calculate_distance_2d(
         kill_x, kill_y,
-        nearby_grenades.get('X', nearby_grenades.get('x', 0)), 
-        nearby_grenades.get('Y', nearby_grenades.get('y', 0))
+        nearby_grenades[x_col], 
+        nearby_grenades[y_col]
     )
     
     # Check for nearby utility
@@ -591,10 +595,15 @@ def get_kill_context(kill_row: pd.Series, ticks_df: pd.DataFrame,
         
         context['attacker_vel_x'] = vel_x
         context['attacker_vel_y'] = vel_y
+        
+        # Extract attacker view angle
+        attacker_view_angle = attacker_tick.get('view_x', attacker_tick.get('viewX', 0))
+        context['attacker_view_angle'] = (attacker_view_angle + 360) % 360
     else:
         context.update({
             'attacker_x': 0, 'attacker_y': 0, 'attacker_z': 0,
-            'attacker_health': 100, 'attacker_vel_x': 0, 'attacker_vel_y': 0
+            'attacker_health': 100, 'attacker_vel_x': 0, 'attacker_vel_y': 0,
+            'attacker_view_angle': 0
         })
     
     if victim_tick is not None:
@@ -1215,6 +1224,7 @@ def extract_teams_from_player_names(player_names: List[str]) -> List[str]:
 
 def analyze_round_context(kill_tick: int, rounds_df: pd.DataFrame, 
                          bomb_df: pd.DataFrame, ticks_df: pd.DataFrame = None, tickrate: int = 64) -> Dict[str, Any]:
+    print(f"DEBUG: analyze_round_context called with kill_tick={kill_tick}, ticks_df empty={ticks_df.empty if ticks_df is not None else 'None'}")
     """
     Analyze round context at the time of kill.
     
@@ -1258,6 +1268,63 @@ def analyze_round_context(kill_tick: int, rounds_df: pd.DataFrame,
         'team2_name': team2_name,
         'game_id': kill_game_id
     }
+    
+    # Calculate alive players at the time of kill
+    print(f"DEBUG: Starting player count calculation for kill tick {kill_tick}")
+    if not ticks_df.empty:
+        print(f"DEBUG: Ticks DataFrame has {len(ticks_df)} rows")
+        # Filter ticks around the kill time (within 1 second)
+        time_window_ticks = 64  # 1 second at 64 tickrate
+        nearby_ticks = ticks_df[
+            (ticks_df['tick'] >= kill_tick - time_window_ticks) & 
+            (ticks_df['tick'] <= kill_tick + time_window_ticks)
+        ]
+        print(f"DEBUG: Found {len(nearby_ticks)} nearby ticks")
+        
+        if not nearby_ticks.empty:
+            # Get the closest tick to the kill
+            closest_tick = nearby_ticks.iloc[nearby_ticks['tick'].sub(kill_tick).abs().argsort()[:1]]
+            print(f"DEBUG: Closest tick has {len(closest_tick)} rows")
+            
+            if not closest_tick.empty:
+                # Debug: Check what columns are available
+                print(f"DEBUG: Available columns in ticks: {list(closest_tick.columns)}")
+                
+                # Try different possible column names for alive status
+                is_alive_col = None
+                for col in ['is_alive', 'alive', 'isAlive', 'IsAlive']:
+                    if col in closest_tick.columns:
+                        is_alive_col = col
+                        break
+                
+                # Try different possible column names for side
+                side_col = None
+                for col in ['side', 'Side', 'team', 'Team', 'team_side', 'teamSide']:
+                    if col in closest_tick.columns:
+                        side_col = col
+                        break
+                
+                if is_alive_col and side_col:
+                    # Count alive players by side
+                    alive_players = closest_tick[closest_tick[is_alive_col] == True]
+                    
+                    if not alive_players.empty:
+                        # Count by side (T vs CT)
+                        t_alive = alive_players[alive_players[side_col].str.upper() == 'T']
+                        ct_alive = alive_players[alive_players[side_col].str.upper() == 'CT']
+                        
+                        round_context['players_alive_t'] = len(t_alive)
+                        round_context['players_alive_ct'] = len(ct_alive)
+                        
+                        print(f"DEBUG: Found {len(t_alive)} T players alive, {len(ct_alive)} CT players alive")
+                        # Add debug info to the context so it shows up in the response
+                        round_context['debug_player_count'] = f"Found {len(t_alive)} T, {len(ct_alive)} CT players alive"
+                else:
+                    print(f"DEBUG: Could not find is_alive column ({is_alive_col}) or side column ({side_col})")
+                    # Fallback: assume 5 players per side (default CS2 team size)
+                    round_context['players_alive_t'] = 5
+                    round_context['players_alive_ct'] = 5
+                    round_context['debug_player_count'] = f"Fallback: Could not find columns (is_alive: {is_alive_col}, side: {side_col})"
     
     # Find current round and calculate match score with proper team tracking
     if not rounds_df.empty:
@@ -1427,9 +1494,13 @@ def analyze_utility_context(kill_tick: int, kill_x: float, kill_y: float,
         
         if not nearby_grenades.empty:
             # Calculate distances
+            # Get X and Y columns (try both uppercase and lowercase)
+            x_col = 'X' if 'X' in nearby_grenades.columns else 'x'
+            y_col = 'Y' if 'Y' in nearby_grenades.columns else 'y'
+            
             nearby_grenades['distance'] = calculate_distance_2d(
                 kill_x, kill_y,
-                nearby_grenades.get('X', 0), nearby_grenades.get('Y', 0)
+                nearby_grenades[x_col], nearby_grenades[y_col]
             )
             
             # Check for active utility within 500 units
@@ -1469,9 +1540,13 @@ def analyze_utility_context(kill_tick: int, kill_x: float, kill_y: float,
         ].copy()
         
         if not nearby_smokes.empty:
+            # Get X and Y columns (try both uppercase and lowercase)
+            x_col = 'X' if 'X' in nearby_smokes.columns else 'x'
+            y_col = 'Y' if 'Y' in nearby_smokes.columns else 'y'
+            
             nearby_smokes['distance'] = calculate_distance_2d(
                 kill_x, kill_y,
-                nearby_smokes.get('X', 0), nearby_smokes.get('Y', 0)
+                nearby_smokes[x_col], nearby_smokes[y_col]
             )
             
             if (nearby_smokes['distance'] <= 500).any():
@@ -1486,9 +1561,13 @@ def analyze_utility_context(kill_tick: int, kill_x: float, kill_y: float,
         ].copy()
         
         if not nearby_infernos.empty:
+            # Get X and Y columns (try both uppercase and lowercase)
+            x_col = 'X' if 'X' in nearby_infernos.columns else 'x'
+            y_col = 'Y' if 'Y' in nearby_infernos.columns else 'y'
+            
             nearby_infernos['distance'] = calculate_distance_2d(
                 kill_x, kill_y,
-                nearby_infernos.get('X', 0), nearby_infernos.get('Y', 0)
+                nearby_infernos[x_col], nearby_infernos[y_col]
             )
             
             if (nearby_infernos['distance'] <= 500).any():
