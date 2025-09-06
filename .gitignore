@@ -17,7 +17,6 @@ dataset/
 results/
 *.parquet
 *.csv
-*.pkl
 *.npz
 *.npy
 *.pt
