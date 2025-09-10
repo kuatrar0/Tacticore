@@ -1,0 +1,43 @@
+# Use Python 3.11 slim image for better performance and smaller size
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better Docker layer caching
+COPY requirements-docker.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements-docker.txt
+
+# Copy the entire project
+COPY . .
+
+# Create necessary directories
+RUN mkdir -p src/backend/models
+RUN mkdir -p dataset
+RUN mkdir -p results
+
+# Set environment variables
+ENV PYTHONPATH=/app
+ENV STREAMLIT_SERVER_PORT=8501
+ENV STREAMLIT_SERVER_ADDRESS=0.0.0.0
+ENV FASTAPI_HOST=0.0.0.0
+ENV FASTAPI_PORT=8000
+
+# Expose ports
+EXPOSE 8501 8000
+
+# Create startup script
+COPY docker-entrypoint.sh /app/
+RUN chmod +x /app/docker-entrypoint.sh
+
+# Default command
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

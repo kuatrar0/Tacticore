@@ -1,0 +1,26 @@
+services:
+  tacticore-dev:
+    build: .
+    container_name: tacticore-dev
+    ports:
+      - "8501:8501"  # Streamlit frontend
+      - "8000:8000"  # FastAPI backend
+    volumes:
+      # Mount source code for live reloading
+      - ./src:/app/src
+      - ./dataset:/app/dataset
+      - ./src/backend/models:/app/src/backend/models
+      - ./results:/app/results
+      - ./maps:/app/maps
+      # Mount requirements for dependency changes
+      - ./requirements-docker.txt:/app/requirements-docker.txt
+    environment:
+      - PYTHONPATH=/app
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+      - FASTAPI_HOST=0.0.0.0
+      - FASTAPI_PORT=8000
+      - STREAMLIT_SERVER_RUN_ON_SAVE=true
+      - STREAMLIT_SERVER_FILE_WATCHER_TYPE=auto
+    restart: unless-stopped
+    command: ["/app/docker-entrypoint.sh"]
