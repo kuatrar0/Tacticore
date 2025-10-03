@@ -22,7 +22,7 @@ from components import (
     display_kill_info, create_navigation_controls, display_labeled_summary,
     create_export_button, create_file_uploaders, create_map_settings,
     create_batch_labeling_controls, create_ml_training_controls, create_labeled_data_importer,
-    auto_retrain_model, create_active_learning_navigation, create_labeled_data_display,
+    create_active_learning_navigation, create_labeled_data_display,
     display_model_predictions, create_live_labeling_feedback, create_enhanced_active_learning_navigation,
     create_model_simulation_mode, show_incremental_training_guide
 )
@@ -155,37 +155,21 @@ def save_labeled_kill(kill_context: Dict, attacker_labels: List[str], victim_lab
         st.session_state.labeled_data.append(labeled_kill)
         st.success("Label saved!")
     
-    # Auto-retrain model if active learning is enabled and we have enough data
-    if ('active_learning_suggestions' in st.session_state and 
-        len(st.session_state.labeled_data) >= 10 and
-        st.session_state.get('ml_mode', False)):
-        
-        # Check if we need to retrain (new labels added)
-        current_labeled_count = len(st.session_state.labeled_data)
-        stored_labeled_count = st.session_state['active_learning_suggestions'].get('labeled_count', 0)
-        
-        if current_labeled_count > stored_labeled_count:
-            # Auto-retrain the model
-            try:
-                # Get filtered_kills from session state if available
-                filtered_kills = st.session_state.get('filtered_kills')
-                auto_retrain_model(st.session_state.labeled_data, filtered_kills)
-                st.success("🤖 **Auto-Training Complete!**")
-                st.info(f"📊 Model updated: {stored_labeled_count} → {current_labeled_count} labeled kills")
-                st.info("🎯 Uncertainty scores recalculated - check sidebar for new suggestions!")
-            except Exception as e:
-                st.warning(f"Auto-retrain failed: {str(e)}")
-        else:
-            # Debug info
-            st.info(f"🔍 Auto-retrain check: {current_labeled_count} current vs {stored_labeled_count} stored labels")
+    # Clear labels for next kill (don't carry over)
+    st.session_state.current_attacker_labels = []
+    st.session_state.current_victim_labels = []
+    
+    # Auto-advance to next kill
+    total_kills = len(st.session_state.filtered_kills) if hasattr(st.session_state, 'filtered_kills') else 0
+    if total_kills > 0:
+        next_index = min(st.session_state.current_kill_index + 1, total_kills - 1)
+        st.session_state.current_kill_index = next_index
+        st.success(f"✅ Labels saved! Advanced to kill {next_index + 1} of {total_kills}")
     else:
-        # Debug info for why auto-retrain isn't working
-        if 'active_learning_suggestions' not in st.session_state:
-            st.info("🔍 Auto-retrain: No active learning suggestions found")
-        elif len(st.session_state.labeled_data) < 10:
-            st.info(f"🔍 Auto-retrain: Only {len(st.session_state.labeled_data)} labeled kills (need 10+)")
-        elif not st.session_state.get('ml_mode', False):
-            st.info("🔍 Auto-retrain: Not in ML Training Mode")
+        st.success("✅ Labels saved!")
+    
+    # Manual training only - no auto-retrain
+    st.info("🔄 Use 'Train Model' button in sidebar to retrain when you want.")
 
 
 def save_batch_labels(batch_labels: Dict, kill_contexts: List[Dict]) -> None:
@@ -393,7 +377,7 @@ def main():
         # Save batch labels
         if st.button("💾 Save Batch Labels", type="primary"):
             save_batch_labels(batch_labels, kill_contexts)
-            st.rerun()
+            st.info("🔄 Batch labels saved. Click 'Refresh Display' to see updated data.")
     
     elif st.session_state.ml_mode:
         # ML training mode
@@ -514,10 +498,8 @@ def main():
                     st.session_state.current_attacker_labels = []
                     st.session_state.current_victim_labels = []
                     
-                    # Auto-advance to next kill
-                    if current_index < total_kills - 1:
-                        st.session_state.current_kill_index = current_index + 1
-                        st.rerun()
+                    # Manual navigation - no auto-advance
+                    st.info("✅ Labels saved! Use navigation buttons to go to next kill.")
                 else:
                     st.warning("Please select at least one label")
             
@@ -531,7 +513,6 @@ def main():
                 # Clear session state labels when navigating to new kill
                 st.session_state.current_attacker_labels = []
                 st.session_state.current_victim_labels = []
-                st.rerun()
     
     elif st.session_state.simulation_mode:
         # Model simulation mode
@@ -638,10 +619,8 @@ def main():
                     st.session_state.current_attacker_labels = []
                     st.session_state.current_victim_labels = []
                     
-                    # Auto-advance to next kill
-                    if current_index < total_kills - 1:
-                        st.session_state.current_kill_index = current_index + 1
-                        st.rerun()
+                    # Manual navigation - no auto-advance
+                    st.info("✅ Labels saved! Use navigation buttons to go to next kill.")
                 else:
                     st.warning("Please select at least one label")
             
@@ -655,7 +634,6 @@ def main():
                 # Clear session state labels when navigating to new kill
                 st.session_state.current_attacker_labels = []
                 st.session_state.current_victim_labels = []
-                st.rerun()
     
     # Bottom section - Enhanced labeled data display
     create_live_labeling_feedback()
@@ -676,7 +654,7 @@ def main():
         4. **Filter Kills**: Use the sidebar filters to focus on specific kills
         5. **Analyze Context**: Review the kill information and map location
         6. **Apply Labels**: Select appropriate labels for both attacker and victim
-        7. **Save & Continue**: Save labels and automatically advance to the next kill
+        7. **Save & Navigate**: Save labels and manually navigate to the next kill
         8. **Export Results**: Download your labeled dataset when finished
         
         ### Labeling Modes:

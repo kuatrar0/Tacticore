@@ -5,15 +5,15 @@ set -e
 
 # Check if we should run a simple command instead of starting services
 if [ "$1" = "python" ] || [ "$1" = "--version" ] || [ "$1" = "bash" ] || [ "$1" = "sh" ] || [ "$1" = "streamlit" ] || [ "$1" = "uvicorn" ]; then
-    echo "🔧 Running command: $@"
+    echo "Running command: $@"
     exec "$@"
 fi
 
-echo "🚀 Starting Tacticore Application..."
+echo "Starting Tacticore Application..."
 
 # Function to start FastAPI backend
 start_backend() {
-    echo "📡 Starting FastAPI backend on port 8000..."
+    echo "Starting FastAPI backend on port 8000..."
     cd /app
     python -m uvicorn src.backend.main:app --host 0.0.0.0 --port 8000 &
     BACKEND_PID=$!
@@ -22,7 +22,7 @@ start_backend() {
 
 # Function to start Streamlit frontend
 start_frontend() {
-    echo "🎨 Starting Streamlit frontend on port 8501..."
+    echo "Starting Streamlit frontend on port 8501..."
     cd /app
     streamlit run src/streamlit_app/app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true &
     FRONTEND_PID=$!
@@ -31,17 +31,17 @@ start_frontend() {
 
 # Function to wait for services
 wait_for_services() {
-    echo "⏳ Waiting for services to start..."
+    echo "Waiting for services to start..."
     
     # Wait for backend
     echo "Waiting for backend to be ready..."
     for i in {1..30}; do
         if curl -f http://localhost:8000/ >/dev/null 2>&1; then
-            echo "✅ Backend is ready!"
+            echo "Backend is ready!"
             break
         fi
         if [ $i -eq 30 ]; then
-            echo "❌ Backend failed to start within 30 seconds"
+            echo "Backend failed to start within 30 seconds"
             exit 1
         fi
         sleep 1
@@ -51,11 +51,11 @@ wait_for_services() {
     echo "Waiting for frontend to be ready..."
     for i in {1..30}; do
         if curl -f http://localhost:8501 >/dev/null 2>&1; then
-            echo "✅ Frontend is ready!"
+            echo "Frontend is ready!"
             break
         fi
         if [ $i -eq 30 ]; then
-            echo "❌ Frontend failed to start within 30 seconds"
+            echo "Frontend failed to start within 30 seconds"
             exit 1
         fi
         sleep 1
@@ -64,7 +64,7 @@ wait_for_services() {
 
 # Function to handle shutdown
 cleanup() {
-    echo "🛑 Shutting down services..."
+    echo "Shutting down services..."
     if [ ! -z "$BACKEND_PID" ]; then
         kill $BACKEND_PID 2>/dev/null || true
     fi
@@ -79,7 +79,7 @@ trap cleanup SIGTERM SIGINT
 
 # Check if we should run in backend-only mode
 if [ "$1" = "backend-only" ]; then
-    echo "🔧 Running in backend-only mode..."
+    echo "Running in backend-only mode..."
     start_backend
     wait $BACKEND_PID
 else
@@ -92,10 +92,10 @@ else
     wait_for_services
     
     echo ""
-    echo "🎉 Tacticore is ready!"
-    echo "📊 Frontend: http://localhost:8501"
-    echo "🔌 Backend API: http://localhost:8000"
-    echo "📚 API Docs: http://localhost:8000/docs"
+    echo "Tacticore is ready!"
+    echo "Frontend: http://localhost:8501"
+    echo "Backend API: http://localhost:8000"
+    echo "API Docs: http://localhost:8000/docs"
     echo ""
     echo "Press Ctrl+C to stop the application"
     

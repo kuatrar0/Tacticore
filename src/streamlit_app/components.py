@@ -205,8 +205,7 @@ def create_label_controls() -> Tuple[List[str], List[str]]:
             default=st.session_state.current_attacker_labels,
             key="attacker_labels_selector"
         )
-        # Update session state
-        st.session_state.current_attacker_labels = attacker_labels
+        # Don't update session state automatically - only when Save is clicked
     
     with col2:
         st.write("**Victim Labels** (Multiple selection)")
@@ -238,8 +237,7 @@ def create_label_controls() -> Tuple[List[str], List[str]]:
             default=st.session_state.current_victim_labels,
             key="victim_labels_selector"
         )
-        # Update session state
-        st.session_state.current_victim_labels = victim_labels
+        # Don't update session state automatically - only when Save is clicked
     
     return attacker_labels, victim_labels
 
@@ -482,18 +480,36 @@ def create_navigation_controls(total_kills: int, current_index: int) -> int:
     
     with col1:
         if st.button("⏮️ First", key="first"):
+            st.session_state.current_kill_index = 0
+            # Clear labels when navigating
+            st.session_state.current_attacker_labels = []
+            st.session_state.current_victim_labels = []
             return 0
     
     with col2:
         if st.button("⬅️ Previous", key="prev"):
-            return max(0, current_index - 1)
+            new_index = max(0, current_index - 1)
+            st.session_state.current_kill_index = new_index
+            # Clear labels when navigating
+            st.session_state.current_attacker_labels = []
+            st.session_state.current_victim_labels = []
+            return new_index
     
     with col3:
         if st.button("➡️ Next", key="next"):
-            return min(total_kills - 1, current_index + 1)
+            new_index = min(total_kills - 1, current_index + 1)
+            st.session_state.current_kill_index = new_index
+            # Clear labels when navigating
+            st.session_state.current_attacker_labels = []
+            st.session_state.current_victim_labels = []
+            return new_index
     
     with col4:
         if st.button("⏭️ Last", key="last"):
+            st.session_state.current_kill_index = total_kills - 1
+            # Clear labels when navigating
+            st.session_state.current_attacker_labels = []
+            st.session_state.current_victim_labels = []
             return total_kills - 1
     
     # Jump to specific index
@@ -505,7 +521,15 @@ def create_navigation_controls(total_kills: int, current_index: int) -> int:
         key="jump_to"
     )
     
-    return new_index
+    # If user changed the number input, update the index
+    if new_index != current_index:
+        st.session_state.current_kill_index = new_index
+        # Clear labels when navigating
+        st.session_state.current_attacker_labels = []
+        st.session_state.current_victim_labels = []
+        return new_index
+    
+    return current_index
 
 
 def display_labeled_summary(labeled_data: List[Dict]) -> None:
@@ -959,7 +983,7 @@ def create_labeled_data_importer() -> None:
                     
                     st.session_state.labeled_data.append(new_label)
                     st.success(f"✅ Added label for {attacker_name} → {victim_name}")
-                    st.rerun()
+                    st.info("🔄 Label added. Click 'Refresh Display' to see updated data.")
                 else:
                     st.warning("Please fill in attacker name and at least one attacker label")
     
@@ -1094,13 +1118,13 @@ def create_labeled_data_importer() -> None:
                             if label.get('source_file') != source
                         ]
                         st.success(f"✅ Cleared {sources[source]} labels from {source}")
-                        st.rerun()
+                        st.info("🔄 Labels cleared. Click 'Refresh Display' to see updated data.")
             
             # Clear all labels
-            if st.button("🗑️ Clear All Labels", type="secondary"):
+            if st.button("🗑️ Clear All Labels", type="secondary", key="clear_all_labels_importer"):
                 st.session_state.labeled_data = []
                 st.success("✅ All labels cleared")
-                st.rerun()
+                st.info("🔄 All labels cleared. Click 'Refresh Display' to see updated data.")
         else:
             st.info("📊 No labeled data to manage")
 
@@ -1158,14 +1182,14 @@ def create_map_settings() -> Tuple[str, str, int, float]:
     # Map image path
     map_image_path = st.text_input(
         "Map Image Path",
-        value=f"../../maps/{selected_map}.png",
+        value=f"maps/{selected_map}.png",
         key="map_image_path"
     )
     
     # Map data path
     map_data_path = st.text_input(
         "Map Data Path",
-        value="../../maps/map-data.json",
+        value="maps/map-data.json",
         key="map_data_path"
     )
     
@@ -1858,7 +1882,9 @@ def create_ml_training_controls(filtered_kills: pd.DataFrame, labeled_data: List
     if labeled_data:
         progress = len(labeled_data) / len(filtered_kills) * 100
         st.sidebar.markdown(f"**Progress: {progress:.1f}%**")
-        st.sidebar.progress(progress / 100)
+        # Ensure progress value is between 0 and 1
+        progress_value = min(progress / 100, 1.0)
+        st.sidebar.progress(progress_value)
         
         # Label distribution
         st.sidebar.markdown("**Label Distribution:**")
@@ -1887,211 +1913,10 @@ def create_ml_training_controls(filtered_kills: pd.DataFrame, labeled_data: List
 
 def auto_retrain_model(labeled_data: List[Dict], filtered_kills: pd.DataFrame = None) -> None:
     """
-    Automatically retrain the model with current labeled data.
-    
-    Args:
-        labeled_data: List of labeled kills
-        filtered_kills: DataFrame with filtered kills (optional, for uncertainty calculation)
+    Auto-retrain function disabled - manual training only.
     """
-    if len(labeled_data) < 10:
-        return  # Not enough data
-    
-    try:
-        # Import here to avoid circular imports
-        try:
-            import lightgbm as lgb
-            use_lightgbm = True
-        except ImportError:
-            from sklearn.ensemble import RandomForestClassifier
-            use_lightgbm = False
-        
-        from sklearn.model_selection import train_test_split
-        from sklearn.preprocessing import LabelEncoder
-        import numpy as np
-        
-        # Prepare training data
-        training_features = []
-        training_labels = []
-        
-        # Check what features are available in the data
-        sample_kill = labeled_data[0] if labeled_data else {}
-        available_features = []
-        
-        # Basic features that should be available
-        basic_features = ['distance_xy', 'time_in_round_s', 'headshot']
-        for feature in basic_features:
-            if feature in sample_kill and sample_kill[feature] is not None:
-                available_features.append(feature)
-        
-        # Enhanced features (optional)
-        enhanced_features = ['victim_was_aware', 'had_sound_cue', 'utility_count', 'approach_align_deg']
-        for feature in enhanced_features:
-            if feature in sample_kill and sample_kill[feature] is not None:
-                available_features.append(feature)
-        
-        for kill in labeled_data:
-            features = []
-            
-            # Always include basic features with fallbacks
-            features.append(float(kill.get('distance_xy', 0)))
-            features.append(float(kill.get('time_in_round_s', 0)))
-            features.append(1 if kill.get('headshot', False) else 0)
-            
-            # Add enhanced features if available, otherwise use defaults
-            if 'victim_was_aware' in available_features:
-                features.append(1 if kill.get('victim_was_aware', False) else 0)
-            else:
-                features.append(0)  # Default: not aware
-            
-            if 'had_sound_cue' in available_features:
-                features.append(1 if kill.get('had_sound_cue', False) else 0)
-            else:
-                features.append(0)  # Default: no sound cue
-            
-            if 'utility_count' in available_features:
-                features.append(float(kill.get('utility_count', 0)))
-            else:
-                features.append(0)  # Default: no utility
-            
-            if 'approach_align_deg' in available_features:
-                features.append(float(kill.get('approach_align_deg', 0) or 0))
-            else:
-                features.append(0)  # Default: no movement
-            
-            # Use attacker labels as target
-            if 'attacker_labels' in kill and kill['attacker_labels']:
-                label = kill['attacker_labels'][0]
-            else:
-                label = 'other'
-            
-            training_features.append(features)
-            training_labels.append(label)
-        
-        # Encode labels
-        label_encoder = LabelEncoder()
-        encoded_labels = label_encoder.fit_transform(training_labels)
-        
-        # Split data
-        X_train, X_val, y_train, y_val = train_test_split(
-            training_features, encoded_labels, test_size=0.2, random_state=42
-        )
-        
-        # Train model
-        if use_lightgbm:
-            model = lgb.LGBMClassifier(
-                n_estimators=100,
-                learning_rate=0.1,
-                max_depth=6,
-                random_state=42,
-                verbose=-1
-            )
-        else:
-            model = RandomForestClassifier(
-                n_estimators=100,
-                max_depth=6,
-                random_state=42
-            )
-        
-        model.fit(X_train, y_train)
-        
-        # Calculate accuracy
-        val_accuracy = model.score(X_val, y_val)
-        
-        # If we have filtered_kills, calculate new uncertainties
-        if filtered_kills is not None and not filtered_kills.empty:
-            unlabeled_features = []
-            unlabeled_indices = []
-            
-            for idx, kill_row in filtered_kills.iterrows():
-                # Check if this kill is already labeled by comparing key attributes
-                is_labeled = any(
-                    (labeled_kill.get('tick') == kill_row.get('tick') and 
-                     labeled_kill.get('attacker_name') == kill_row.get('attacker_name') and
-                     labeled_kill.get('victim_name') == kill_row.get('victim_name'))
-                    for labeled_kill in labeled_data
-                )
-                
-                if not is_labeled:
-                    # Extract features for unlabeled kill (same logic as training)
-                    features = []
-                    
-                    # Always include basic features with fallbacks
-                    features.append(float(kill_row.get('distance_xy', 0)))
-                    features.append(float(kill_row.get('time_in_round_s', 0)))
-                    features.append(1 if kill_row.get('headshot', False) else 0)
-                    
-                    # Add enhanced features if available, otherwise use defaults
-                    if 'victim_was_aware' in available_features:
-                        features.append(1 if kill_row.get('victim_was_aware', False) else 0)
-                    else:
-                        features.append(0)  # Default: not aware
-                    
-                    if 'had_sound_cue' in available_features:
-                        features.append(1 if kill_row.get('had_sound_cue', False) else 0)
-                    else:
-                        features.append(0)  # Default: no sound cue
-                    
-                    if 'utility_count' in available_features:
-                        features.append(float(kill_row.get('utility_count', 0)))
-                    else:
-                        features.append(0)  # Default: no utility
-                    
-                    if 'approach_align_deg' in available_features:
-                        features.append(float(kill_row.get('approach_align_deg', 0) or 0))
-                    else:
-                        features.append(0)  # Default: no movement
-                    
-                    unlabeled_features.append(features)
-                    unlabeled_indices.append(idx)
-            
-            if unlabeled_features:
-                try:
-                    # Get prediction probabilities
-                    probabilities = model.predict_proba(unlabeled_features)
-                    
-                    # Calculate uncertainty (entropy)
-                    uncertainties = []
-                    for prob in probabilities:
-                        # Add small epsilon to avoid log(0)
-                        prob_safe = prob + 1e-10
-                        prob_safe = prob_safe / prob_safe.sum()  # Renormalize
-                        # Use log2 for entropy calculation (more standard)
-                        entropy = -np.sum(prob_safe * np.log2(prob_safe + 1e-10))
-                        uncertainties.append(entropy)
-                    
-                    # Sort by uncertainty (highest first)
-                    uncertainty_data = list(zip(unlabeled_indices, uncertainties))
-                    uncertainty_data.sort(key=lambda x: x[1], reverse=True)
-                    
-                    # Update session state with new suggestions
-                    st.session_state['active_learning_suggestions'] = {
-                        'suggested_indices': [idx for idx, _ in uncertainty_data[:10]],  # Default to 10
-                        'uncertainties': [unc for _, unc in uncertainty_data[:10]],
-                        'model_accuracy': val_accuracy,
-                        'labeled_count': len(labeled_data),
-                        'total_unlabeled': len(unlabeled_features)
-                    }
-                except Exception as e:
-                    # If prediction fails, still update model info
-                    st.session_state['active_learning_suggestions'] = {
-                        'model_accuracy': val_accuracy,
-                        'labeled_count': len(labeled_data),
-                        'error': str(e)
-                    }
-        
-        # Store model info even without filtered_kills
-        if 'active_learning_suggestions' not in st.session_state:
-            st.session_state['active_learning_suggestions'] = {
-                'model_accuracy': val_accuracy,
-                'labeled_count': len(labeled_data)
-            }
-        else:
-            st.session_state['active_learning_suggestions']['model_accuracy'] = val_accuracy
-            st.session_state['active_learning_suggestions']['labeled_count'] = len(labeled_data)
-            
-    except Exception as e:
-        # Silently fail for auto-retrain to avoid disrupting the UI
-        pass
+    pass
+    # Auto-retrain function disabled - manual training only
 
 
 def display_enhanced_kill_info(kill_context: Dict) -> None:
@@ -2302,19 +2127,25 @@ def create_active_learning_navigation(current_index: int, total_kills: int, is_a
                         next_uncertain_idx = suggested_indices[current_suggestion_idx + 1]
                         if st.button("🎯 Next Uncertain Kill", type="secondary"):
                             st.session_state.current_kill_index = next_uncertain_idx
-                            st.rerun()
+                            # Clear labels when navigating
+                            st.session_state.current_attacker_labels = []
+                            st.session_state.current_victim_labels = []
                     else:
                         # We're at the last uncertain kill, go to first
                         next_uncertain_idx = suggested_indices[0]
                         if st.button("🎯 Go to First Uncertain Kill", type="secondary"):
                             st.session_state.current_kill_index = next_uncertain_idx
-                            st.rerun()
+                            # Clear labels when navigating
+                            st.session_state.current_attacker_labels = []
+                            st.session_state.current_victim_labels = []
                 else:
                     # Current kill is not in suggestions, go to first suggestion
                     next_uncertain_idx = suggested_indices[0]
                     if st.button("🎯 Go to Uncertain Kill", type="secondary"):
                         st.session_state.current_kill_index = next_uncertain_idx
-                        st.rerun()
+                        # Clear labels when navigating
+                        st.session_state.current_attacker_labels = []
+                        st.session_state.current_victim_labels = []
                 
                 # Show uncertainty info
                 if current_index in suggested_indices:
@@ -2363,12 +2194,13 @@ def create_labeled_data_display() -> None:
         # Clear all labels button
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("🗑️ Clear All Labels", type="secondary"):
+            if st.button("🗑️ Clear All Labels", type="secondary", key="clear_all_labels_display"):
                 st.session_state.labeled_data = []
-                st.rerun()
+                st.success("✅ All labels cleared")
+                st.info("🔄 All labels cleared. Click 'Refresh Display' to see updated data.")
         
         with col2:
-            if st.button("🔄 Refresh Display", type="secondary"):
+            if st.button("🔄 Refresh Display", type="secondary", key="refresh_display"):
                 st.rerun()
     else:
         st.markdown("---")
@@ -2604,17 +2436,23 @@ def create_enhanced_active_learning_navigation(current_index: int, total_kills: 
                             next_uncertain_idx = suggested_indices[rank]  # Next in sequence
                             if st.button("➡️ Next Uncertain Kill", type="primary"):
                                 st.session_state.current_kill_index = next_uncertain_idx
-                                st.rerun()
+                                # Clear labels when navigating
+                                st.session_state.current_attacker_labels = []
+                                st.session_state.current_victim_labels = []
                         else:
                             if st.button("🔄 Back to First Uncertain", type="secondary"):
                                 st.session_state.current_kill_index = suggested_indices[0]
-                                st.rerun()
+                                # Clear labels when navigating
+                                st.session_state.current_attacker_labels = []
+                                st.session_state.current_victim_labels = []
                     
                     with col2:
                         if st.button("🎲 Random Uncertain Kill", type="secondary"):
                             random_idx = random.choice(suggested_indices)
                             st.session_state.current_kill_index = random_idx
-                            st.rerun()
+                            # Clear labels when navigating
+                            st.session_state.current_attacker_labels = []
+                            st.session_state.current_victim_labels = []
                     
                     # Show what makes this kill uncertain
                     st.info("💡 **Why is this kill uncertain?**")
@@ -2628,7 +2466,9 @@ def create_enhanced_active_learning_navigation(current_index: int, total_kills: 
                     # Go to uncertain kill button
                     if st.button("🎯 Go to Uncertain Kill", type="primary"):
                         st.session_state.current_kill_index = suggested_indices[0]
-                        st.rerun()
+                        # Clear labels when navigating
+                        st.session_state.current_attacker_labels = []
+                        st.session_state.current_victim_labels = []
                     
                     st.info("💡 **Why go to uncertain kills?**")
                     st.write("• Uncertain kills help the model learn most")
@@ -3031,7 +2871,7 @@ def create_model_simulation_mode(
         st.write(f"Corrections made: {len(st.session_state.get('simulation_corrections', []))}")
         
         if st.button("🔄 Refresh Simulation"):
-            st.rerun()
+            st.info("🔄 Simulation refreshed. Click 'Refresh Display' to see updated data.")
 
 
 def show_incremental_training_guide() -> None:

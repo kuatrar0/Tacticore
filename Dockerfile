@@ -4,12 +4,21 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies including Go
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     curl \
+    wget \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Go (required by AWPy)
+RUN wget https://go.dev/dl/go1.21.5.linux-amd64.tar.gz \
+    && tar -C /usr/local -xzf go1.21.5.linux-amd64.tar.gz \
+    && rm go1.21.5.linux-amd64.tar.gz
+
+# Add Go to PATH
+ENV PATH="/usr/local/go/bin:${PATH}"
 
 # Copy requirements first for better Docker layer caching
 COPY requirements-docker.txt .
