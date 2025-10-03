@@ -240,12 +240,12 @@ def parse_single_demo(demo_path: Path, output_dir: Path, partition_rounds: bool 
     """
     try:
         # Import AWPy here to handle import errors gracefully
-        from awpy import Demo
+        from awpy.parser import DemoParser
         
         logger.info(f"Parsing demo: {demo_path}")
         
         # Create demo object and parse
-        demo = Demo(str(demo_path))
+        demo = DemoParser(str(demo_path))
         demo.parse()
         
         # Get demo name and create output directory
