@@ -44,9 +44,5 @@ ENV FASTAPI_PORT=8000
 # Expose ports
 EXPOSE 8501 8000
 
-# Create startup script
-COPY docker-entrypoint.sh /app/
-RUN chmod +x /app/docker-entrypoint.sh
-
-# Default command
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
+# Default command - start the backend directly
+CMD ["python", "-m", "uvicorn", "src.backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
