@@ -26,6 +26,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from streamlit_app.transforms import get_enhanced_kill_context
 from streamlit_app.components import extract_kill_features
 from parser.parse_dem_to_parquet import parse_single_demo
+from .refined_dual_analyzer import refined_dual_analyzer
 
 app = FastAPI(
     title="Tacticore CS2 Kill Analyzer",
@@ -176,12 +177,12 @@ class KillAnalyzer:
                     self.label_encoder = pickle.load(f)
                 with open(features_path, 'rb') as f:
                     self.available_features = pickle.load(f)
-                print(f"✅ Model loaded successfully from {self.models_dir}")
+                print(f"SUCCESS: Model loaded successfully from {self.models_dir}")
             else:
-                print(f"⚠️ Model files not found in {self.models_dir}")
+                print(f"WARNING: Model files not found in {self.models_dir}")
                 print(f"   Expected: {model_path}, {encoder_path}, {features_path}")
         except Exception as e:
-            print(f"❌ Error loading model: {e}")
+            print(f"ERROR: Error loading model: {e}")
     
     def predict_kill(self, kill_dict: Dict, map_data: Dict, tickrate: int = 64) -> Dict:
         """Predict labels for a single kill."""
@@ -426,10 +427,10 @@ async def analyze_demo(demo_file: UploadFile = File(...)):
     Returns:
         JSON with kill analysis and predictions
     """
-    if not analyzer.model:
+    if not refined_dual_analyzer.is_loaded():
         return JSONResponse(
             status_code=400,
-            content={"error": "No trained model available. Please train a model first using the Streamlit app."}
+            content={"error": "No trained refined dual model available. Please train a model first using the CSV data."}
         )
     
     if not demo_file.filename.lower().endswith('.dem'):
@@ -503,8 +504,8 @@ async def analyze_demo(demo_file: UploadFile = File(...)):
                 enhanced_kill_dict = kill_dict.copy()
                 enhanced_kill_dict.update(kill_context)
                 
-                # Make prediction using enhanced data
-                prediction = analyzer.predict_kill(enhanced_kill_dict, map_data, tickrate)
+                # Make refined dual prediction using enhanced data
+                dual_analysis = refined_dual_analyzer.analyze_kill(enhanced_kill_dict, threshold=0.5)
                 
                 # Create result with all values converted to native Python types
                 kill_result = {
@@ -518,7 +519,9 @@ async def analyze_demo(demo_file: UploadFile = File(...)):
                     "distance": float(kill_context.get('distance_xy', 0.0)),
                     "time_in_round": float(kill_context.get('time_in_round_s', 0.0)),
                     "context": kill_context,
-                    "prediction": prediction
+                    "attacker_strengths": dual_analysis.get("attacker_strengths", {}),
+                    "victim_errors": dual_analysis.get("victim_errors", {}),
+                    "analysis_summary": refined_dual_analyzer.get_analysis_summary(dual_analysis)
                 }
                 predictions.append(kill_result)
                 
