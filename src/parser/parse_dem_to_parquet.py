@@ -445,7 +445,7 @@ Examples:
         
         # Update total counts
         for table, count in saved_data.items():
-            if count is not None:
+            if count is not None and isinstance(count, (int, float)):
                 total_saved[table] = total_saved.get(table, 0) + count
     
     # Update global dataset index

@@ -44,5 +44,8 @@ ENV FASTAPI_PORT=8000
 # Expose ports
 EXPOSE 8501 8000
 
-# Default command - start the backend directly
-CMD ["python", "-m", "uvicorn", "src.backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Make the start script executable
+RUN chmod +x start_services.sh
+
+# Default command - start both services
+CMD ["./start_services.sh"]

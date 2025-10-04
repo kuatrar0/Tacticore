@@ -26,7 +26,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from streamlit_app.transforms import get_enhanced_kill_context
 from streamlit_app.components import extract_kill_features
 from parser.parse_dem_to_parquet import parse_single_demo
-from .refined_dual_analyzer import refined_dual_analyzer
+from .filtered_dual_analyzer import filtered_dual_analyzer
 
 app = FastAPI(
     title="Tacticore CS2 Kill Analyzer",
@@ -427,10 +427,10 @@ async def analyze_demo(demo_file: UploadFile = File(...)):
     Returns:
         JSON with kill analysis and predictions
     """
-    if not refined_dual_analyzer.is_loaded():
+    if not filtered_dual_analyzer.is_loaded():
         return JSONResponse(
             status_code=400,
-            content={"error": "No trained refined dual model available. Please train a model first using the CSV data."}
+            content={"error": "No trained filtered dual model available. Please train a model first using the CSV data."}
         )
     
     if not demo_file.filename.lower().endswith('.dem'):
@@ -504,8 +504,8 @@ async def analyze_demo(demo_file: UploadFile = File(...)):
                 enhanced_kill_dict = kill_dict.copy()
                 enhanced_kill_dict.update(kill_context)
                 
-                # Make refined dual prediction using enhanced data
-                dual_analysis = refined_dual_analyzer.analyze_kill(enhanced_kill_dict, threshold=0.5)
+                # Make filtered dual prediction using enhanced data
+                dual_analysis = filtered_dual_analyzer.analyze_kill(enhanced_kill_dict, threshold=0.5)
                 
                 # Create result with all values converted to native Python types
                 kill_result = {
@@ -521,7 +521,7 @@ async def analyze_demo(demo_file: UploadFile = File(...)):
                     "context": kill_context,
                     "attacker_strengths": dual_analysis.get("attacker_strengths", {}),
                     "victim_errors": dual_analysis.get("victim_errors", {}),
-                    "analysis_summary": refined_dual_analyzer.get_analysis_summary(dual_analysis)
+                    "analysis_summary": filtered_dual_analyzer.get_analysis_summary(dual_analysis)
                 }
                 predictions.append(kill_result)
                 
