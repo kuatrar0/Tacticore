@@ -13,13 +13,12 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import classification_report, confusion_matrix
 import lightgbm as lgb
 import pickle
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 # Add src to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
@@ -66,7 +65,6 @@ def prepare_features(df: pd.DataFrame, target_column: str) -> Tuple[pd.DataFrame
     """
     logger.info(f"Preparing features for target: {target_column}")
     
-    # Filter to labeled samples only
     labeled_mask = df[target_column] != ''
     labeled_df = df[labeled_mask].copy()
     
@@ -75,37 +73,29 @@ def prepare_features(df: pd.DataFrame, target_column: str) -> Tuple[pd.DataFrame
     
     logger.info(f"Using {len(labeled_df)} labeled samples for training")
     
-    # Define feature columns
     feature_columns = [
         'distance_xy', 'time_in_round_s', 'approach_align_deg',
         'attacker_health', 'victim_health', 'headshot',
         'flash_near', 'smoke_near', 'molotov_near', 'he_near'
     ]
     
-    # Add categorical features if they exist
     categorical_features = ['side', 'place']
     for col in categorical_features:
         if col in df.columns:
             feature_columns.append(col)
     
-    # Filter to available features
     available_features = [col for col in feature_columns if col in df.columns]
     
-    # Prepare features
     X = labeled_df[available_features].copy()
     y = labeled_df[target_column].copy()
     
-    # Handle categorical variables
     for col in categorical_features:
         if col in available_features:
-            # Convert to numeric for LightGBM
             le = LabelEncoder()
             X[col] = le.fit_transform(X[col].astype(str))
     
-    # Fill missing values
     X = X.fillna(0)
     
-    # Encode target variable
     target_encoder = LabelEncoder()
     y_encoded = target_encoder.fit_transform(y)
     
@@ -133,12 +123,10 @@ def train_lightgbm_model(X: pd.DataFrame, y: np.ndarray, feature_names: List[str
     """
     logger.info(f"Training LightGBM model for {target_name}...")
     
-    # Split data
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=random_state, stratify=y
     )
     
-    # Configure LightGBM parameters
     params = {
         'objective': 'multiclass',
         'num_class': len(np.unique(y)),
@@ -152,11 +140,9 @@ def train_lightgbm_model(X: pd.DataFrame, y: np.ndarray, feature_names: List[str
         'random_state': random_state
     }
     
-    # Create datasets
     train_data = lgb.Dataset(X_train, label=y_train, feature_name=feature_names)
     test_data = lgb.Dataset(X_test, label=y_test, feature_name=feature_names, reference=train_data)
     
-    # Train model
     model = lgb.train(
         params,
         train_data,
@@ -165,11 +151,9 @@ def train_lightgbm_model(X: pd.DataFrame, y: np.ndarray, feature_names: List[str
         callbacks=[lgb.early_stopping(stopping_rounds=20), lgb.log_evaluation(0)]
     )
     
-    # Evaluate on test set
     y_pred = model.predict(X_test, num_iteration=model.best_iteration)
     y_pred_classes = np.argmax(y_pred, axis=1)
     
-    # Calculate metrics
     from sklearn.metrics import accuracy_score, precision_recall_fscore_support
     
     accuracy = accuracy_score(y_test, y_pred_classes)
@@ -201,16 +185,13 @@ def create_feature_importance_plot(model: lgb.Booster, feature_names: List[str],
         target_name: Name of the target variable
         output_dir: Directory to save the plot
     """
-    # Get feature importance
     importance = model.feature_importance(importance_type='gain')
     
-    # Create DataFrame
     importance_df = pd.DataFrame({
         'feature': feature_names,
         'importance': importance
     }).sort_values('importance', ascending=True)
     
-    # Create plot
     plt.figure(figsize=(10, max(6, len(feature_names) * 0.3)))
     plt.barh(range(len(importance_df)), importance_df['importance'])
     plt.yticks(range(len(importance_df)), importance_df['feature'])
@@ -218,7 +199,6 @@ def create_feature_importance_plot(model: lgb.Booster, feature_names: List[str],
     plt.title(f'Feature Importance - {target_name}')
     plt.tight_layout()
     
-    # Save plot
     plot_path = output_dir / f"feature_importance_{target_name.lower().replace('_', '')}.png"
     plt.savefig(plot_path, dpi=300, bbox_inches='tight')
     plt.close()
@@ -239,20 +219,26 @@ def create_confusion_matrix_plot(y_true: np.ndarray, y_pred: np.ndarray,
         target_name: Name of the target variable
         output_dir: Directory to save the plot
     """
-    # Create confusion matrix
     cm = confusion_matrix(y_true, y_pred)
     
-    # Create plot
     plt.figure(figsize=(8, 6))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                xticklabels=target_encoder.classes_,
-                yticklabels=target_encoder.classes_)
+    plt.imshow(cm, interpolation='nearest', cmap='Blues')
+    plt.colorbar()
+    tick_marks = np.arange(len(target_encoder.classes_))
+    plt.xticks(tick_marks, target_encoder.classes_, rotation=45)
+    plt.yticks(tick_marks, target_encoder.classes_)
     plt.title(f'Confusion Matrix - {target_name}')
     plt.xlabel('Predicted')
     plt.ylabel('True')
+    
+    thresh = cm.max() / 2.
+    for i, j in np.ndindex(cm.shape):
+        plt.text(j, i, format(cm[i, j], 'd'),
+                horizontalalignment="center",
+                color="white" if cm[i, j] > thresh else "black")
+    
     plt.tight_layout()
     
-    # Save plot
     plot_path = output_dir / f"confusion_matrix_{target_name.lower().replace('_', '')}.png"
     plt.savefig(plot_path, dpi=300, bbox_inches='tight')
     plt.close()
@@ -273,7 +259,6 @@ def save_model(model: lgb.Booster, target_encoder: LabelEncoder, feature_names: 
         metrics: Training metrics
         output_dir: Directory to save the model
     """
-    # Save model
     model_path = output_dir / f"tacticore_model_{target_name.lower().replace('_', '')}.pkl"
     
     model_data = {
@@ -342,31 +327,24 @@ Examples:
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    # Create output directory
     args.output.mkdir(parents=True, exist_ok=True)
     
-    # Load data
     df = load_training_data(args.features)
     
-    # Check if target column exists
     if args.target not in df.columns:
         logger.error(f"Target column '{args.target}' not found in data")
         sys.exit(1)
     
-    # Prepare features
     try:
         X, y, feature_names, target_encoder = prepare_features(df, args.target)
     except ValueError as e:
         logger.error(f"Feature preparation failed: {e}")
         sys.exit(1)
     
-    # Train model
     model, metrics = train_lightgbm_model(X, y, feature_names, args.target, args.random_state)
     
-    # Create plots
     create_feature_importance_plot(model, feature_names, args.target, args.output)
     
-    # Create confusion matrix
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=args.random_state, stratify=y
     )
@@ -374,14 +352,10 @@ Examples:
     y_pred_classes = np.argmax(y_pred, axis=1)
     create_confusion_matrix_plot(y_test, y_pred_classes, target_encoder, args.target, args.output)
     
-    # Save model
     save_model(model, target_encoder, feature_names, args.target, metrics, args.output)
     
-    # Print detailed classification report
     logger.info("Classification Report:")
     print(classification_report(y_test, y_pred_classes, target_names=target_encoder.classes_))
-    
-    # Print summary
     logger.info("Model training completed!")
     logger.info(f"Target variable: {args.target}")
     logger.info(f"Training samples: {len(X)}")

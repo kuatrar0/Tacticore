@@ -45,7 +45,6 @@ def extract_enhanced_data(demo) -> Dict[str, pd.DataFrame]:
     """
     enhanced_data = {}
     
-    # Extract basic tables
     basic_tables = [
         'ticks', 'kills', 'damages', 'shots', 'grenades', 
         'smokes', 'infernos', 'bomb', 'rounds'
@@ -58,7 +57,6 @@ def extract_enhanced_data(demo) -> Dict[str, pd.DataFrame]:
             if df is not None and not df.empty:
                 enhanced_data[table_name] = df
     
-    # Extract additional context data
     enhanced_data.update(extract_sound_events(demo))
     enhanced_data.update(extract_player_states(demo))
     enhanced_data.update(extract_round_context(demo))
@@ -78,14 +76,9 @@ def extract_sound_events(demo) -> Dict[str, pd.DataFrame]:
     """
     sound_data = {}
     
-    # Try to extract footsteps, weapon sounds, etc.
-    # Note: AWPy may not expose all sound events directly
-    # We'll work with what's available and enhance with derived features
-    
     if hasattr(demo, 'damages'):
         damages_df = to_pandas_maybe(demo.damages)
         if damages_df is not None and not damages_df.empty:
-            # Add sound context to damages
             damages_df['has_sound_cue'] = True
             damages_df['sound_type'] = 'damage'
             sound_data['damage_sounds'] = damages_df
@@ -93,7 +86,6 @@ def extract_sound_events(demo) -> Dict[str, pd.DataFrame]:
     if hasattr(demo, 'shots'):
         shots_df = to_pandas_maybe(demo.shots)
         if shots_df is not None and not shots_df.empty:
-            # Add sound context to shots
             shots_df['has_sound_cue'] = True
             shots_df['sound_type'] = 'shot'
             sound_data['shot_sounds'] = shots_df
@@ -138,12 +130,10 @@ def enhance_ticks_data(ticks_df: pd.DataFrame) -> pd.DataFrame:
     
     enhanced = ticks_df.copy()
     
-    # Add derived features
     enhanced['is_alive'] = enhanced.get('health', 100) > 0
     enhanced['is_ducking'] = enhanced.get('ducking', False)
     enhanced['is_scoped'] = enhanced.get('scoped', False)
     
-    # Calculate movement speed
     if 'vel_x' in enhanced.columns and 'vel_y' in enhanced.columns:
         enhanced['movement_speed'] = np.sqrt(
             enhanced['vel_x']**2 + enhanced['vel_y']**2
@@ -153,7 +143,6 @@ def enhance_ticks_data(ticks_df: pd.DataFrame) -> pd.DataFrame:
         enhanced['movement_speed'] = 0
         enhanced['is_moving'] = False
     
-    # Add weapon context
     enhanced['has_primary'] = enhanced.get('primary_weapon', '') != ''
     enhanced['has_secondary'] = enhanced.get('secondary_weapon', '') != ''
     enhanced['has_utility'] = enhanced.get('utility_weapon', '') != ''
@@ -198,7 +187,6 @@ def enhance_rounds_data(rounds_df: pd.DataFrame) -> pd.DataFrame:
     
     enhanced = rounds_df.copy()
     
-    # Map AWPy column names to expected names
     column_mapping = {
         'start': 'start_tick',
         'end': 'end_tick', 
@@ -210,18 +198,15 @@ def enhance_rounds_data(rounds_df: pd.DataFrame) -> pd.DataFrame:
         'bomb_site': 'bomb_site'
     }
     
-    # Rename columns that exist
     for old_name, new_name in column_mapping.items():
         if old_name in enhanced.columns:
             enhanced = enhanced.rename(columns={old_name: new_name})
     
-    # Add round phase information
     enhanced['round_phase'] = 'unknown'
     
-    # Add time-based features
     if 'start_tick' in enhanced.columns and 'end_tick' in enhanced.columns:
         enhanced['round_duration_ticks'] = enhanced['end_tick'] - enhanced['start_tick']
-        enhanced['round_duration_seconds'] = enhanced['round_duration_ticks'] / 64  # Assuming 64 tickrate
+        enhanced['round_duration_seconds'] = enhanced['round_duration_ticks'] / 64
     
     return enhanced
 
@@ -239,27 +224,20 @@ def parse_single_demo(demo_path: Path, output_dir: Path, partition_rounds: bool 
         Dictionary of saved table names and row counts
     """
     try:
-        # Import AWPy here to handle import errors gracefully
         from awpy import Demo
         
         logger.info(f"Parsing demo: {demo_path}")
         
-        # Create demo object and parse (AWPy 2.0+ API)
         demo = Demo(demo_path)
         demo.parse()
         
-        # Get demo name and create output directory
         demo_name = get_demo_stem(demo_path)
         demo_output_dir = output_dir / demo_name
         demo_output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Track saved data
         saved_data = {}
-        
-        # Extract enhanced data
         enhanced_data = extract_enhanced_data(demo)
         
-        # Define tables to extract (in order of importance)
         tables_to_extract = [
             ('enhanced_ticks', 'ticks.parquet'),
             ('kills', 'kills.parquet'),
@@ -274,7 +252,6 @@ def parse_single_demo(demo_path: Path, output_dir: Path, partition_rounds: bool 
             ('shot_sounds', 'shot_sounds.parquet'),
         ]
         
-        # Extract each table
         for table_name, filename in tables_to_extract:
             if table_name in enhanced_data:
                 df = enhanced_data[table_name]
@@ -284,7 +261,6 @@ def parse_single_demo(demo_path: Path, output_dir: Path, partition_rounds: bool 
                     if safe_save_parquet(df, filepath, table_name):
                         saved_data[table_name] = len(df)
                         
-                        # Optionally partition by rounds
                         if partition_rounds and 'round' in df.columns:
                             partition_by_rounds(df, demo_output_dir, table_name)
                 else:
@@ -294,21 +270,14 @@ def parse_single_demo(demo_path: Path, output_dir: Path, partition_rounds: bool 
                 logger.warning(f"Table {table_name} not available in this AWPy version")
                 saved_data[table_name] = None
         
-        # Debug: Check what's in the demo header
         demo_header = getattr(demo, 'header', {})
-        print(f"DEBUG: Demo header keys: {list(demo_header.keys()) if demo_header else 'No header'}")
-        print(f"DEBUG: Demo header content: {demo_header}")
-        
-        # Try different possible map name fields
         map_name = 'unknown'
         if demo_header:
             for key in ['map_name', 'mapName', 'map', 'Map', 'mapname']:
                 if key in demo_header:
                     map_name = demo_header[key]
-                    print(f"DEBUG: Found map name '{map_name}' in header field '{key}'")
                     break
         
-        # Save metadata
         meta_data = {
             'demo_file': str(demo_path),
             'map': map_name,
@@ -321,7 +290,6 @@ def parse_single_demo(demo_path: Path, output_dir: Path, partition_rounds: bool 
         
         logger.info(f"Successfully parsed {demo_path}")
         
-        # Add map name to saved_data for easy access
         saved_data['map'] = meta_data['map']
         
         return saved_data
@@ -435,27 +403,22 @@ Examples:
     
     logger.info(f"Found {len(demo_files)} demo file(s) to process")
     
-    # Create output directory
     args.output.mkdir(parents=True, exist_ok=True)
     
-    # Process each demo file
     total_saved = {}
     for demo_file in tqdm(demo_files, desc="Parsing demos"):
         saved_data = parse_single_demo(demo_file, args.output, args.partition_rounds)
         
-        # Update total counts
         for table, count in saved_data.items():
             if count is not None and isinstance(count, (int, float)):
                 total_saved[table] = total_saved.get(table, 0) + count
     
-    # Update global dataset index
     index_file = args.output / 'index.csv'
     for demo_file in demo_files:
         demo_name = get_demo_stem(demo_file)
         demo_saved = parse_single_demo(demo_file, args.output, args.partition_rounds)
         update_dataset_index(index_file, demo_name, demo_saved)
     
-    # Print summary
     logger.info("Parsing complete!")
     logger.info(f"Output directory: {args.output}")
     logger.info("Total rows saved:")

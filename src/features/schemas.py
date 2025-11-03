@@ -145,18 +145,15 @@ def validate_dataframe_schema(df, schema) -> Dict[str, Any]:
         'warnings': []
     }
     
-    # Check required columns
     for col in schema.required_columns:
         if col not in df.columns:
             validation_result['missing_required'].append(col)
             validation_result['valid'] = False
     
-    # Check optional columns
     for col in schema.optional_columns:
         if col not in df.columns:
             validation_result['missing_optional'].append(col)
     
-    # Check data types (for columns that exist)
     for col, expected_type in schema.expected_types.items():
         if col in df.columns:
             if not df[col].empty:

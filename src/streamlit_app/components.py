@@ -37,35 +37,31 @@ def extract_kill_features(kill: pd.Series, kills_df: pd.DataFrame, map_data: Dic
     """
     try:
         features = []
-        
-        # Get available features from session state (same as training)
         available_features = st.session_state.get('available_features', [])
         
-        # Always include basic features with fallbacks (same as training)
         features.append(float(kill.get('distance_xy', 0)))
         features.append(float(kill.get('time_in_round_s', 0)))
         features.append(1 if kill.get('headshot', False) else 0)
         
-        # Add enhanced features if available, otherwise use defaults (same as training)
         if 'victim_was_aware' in available_features:
             features.append(1 if kill.get('victim_was_aware', False) else 0)
         else:
-            features.append(0)  # Default: not aware
+            features.append(0)
         
         if 'had_sound_cue' in available_features:
             features.append(1 if kill.get('had_sound_cue', False) else 0)
         else:
-            features.append(0)  # Default: no sound cue
+            features.append(0)
         
         if 'utility_count' in available_features:
             features.append(float(kill.get('utility_count', 0)))
         else:
-            features.append(0)  # Default: no utility
+            features.append(0)
         
         if 'approach_align_deg' in available_features:
             features.append(float(kill.get('approach_align_deg', 0) or 0))
         else:
-            features.append(0)  # Default: no movement
+            features.append(0)
         
         return features
         
@@ -88,28 +84,22 @@ def create_filters(kills_df: pd.DataFrame) -> Dict:
     
     filters = {}
     
-    # Map filter - try both column names
     place_col = 'attacker_place' if 'attacker_place' in kills_df.columns else 'place'
     if place_col in kills_df.columns:
-        # Handle None values in place column
         unique_places = kills_df[place_col].dropna().unique().tolist()
         places = ['All'] + sorted([str(p) for p in unique_places if p is not None])
         filters['place'] = st.sidebar.selectbox("Map Place", places)
     
-    # Side filter - try both column names
     side_col = 'attacker_side' if 'attacker_side' in kills_df.columns else 'side'
     if side_col in kills_df.columns:
-        # Handle None values in side column
         unique_sides = kills_df[side_col].dropna().unique().tolist()
         sides = ['All'] + sorted([str(s) for s in unique_sides if s is not None])
         filters['side'] = st.sidebar.selectbox("Side", sides)
     
-    # Headshot filter
     if 'headshot' in kills_df.columns:
         headshot_options = ['All', 'Headshots Only', 'Non-headshots Only']
         filters['headshot'] = st.sidebar.selectbox("Headshot", headshot_options)
     
-    # Time range filter
     if 'tick' in kills_df.columns:
         min_tick = int(kills_df['tick'].min())
         max_tick = int(kills_df['tick'].max())
@@ -137,26 +127,22 @@ def apply_filters(kills_df: pd.DataFrame, filters: Dict) -> pd.DataFrame:
     """
     filtered_df = kills_df.copy()
     
-    # Apply place filter - try both column names
     if 'place' in filters and filters['place'] != 'All':
         place_col = 'attacker_place' if 'attacker_place' in filtered_df.columns else 'place'
         if place_col in filtered_df.columns:
             filtered_df = filtered_df[filtered_df[place_col] == filters['place']]
     
-    # Apply side filter - try both column names
     if 'side' in filters and filters['side'] != 'All':
         side_col = 'attacker_side' if 'attacker_side' in filtered_df.columns else 'side'
         if side_col in filtered_df.columns:
             filtered_df = filtered_df[filtered_df[side_col] == filters['side']]
     
-    # Apply headshot filter
     if 'headshot' in filters:
         if filters['headshot'] == 'Headshots Only':
             filtered_df = filtered_df[filtered_df['headshot'] == True]
         elif filters['headshot'] == 'Non-headshots Only':
             filtered_df = filtered_df[filtered_df['headshot'] == False]
     
-    # Apply tick range filter
     if 'tick_range' in filters:
         min_tick, max_tick = filters['tick_range']
         filtered_df = filtered_df[
@@ -177,7 +163,6 @@ def create_label_controls() -> Tuple[List[str], List[str]]:
     """
     st.subheader("Label the Kill")
     
-    # Initialize session state for labels if not exists
     if 'current_attacker_labels' not in st.session_state:
         st.session_state.current_attacker_labels = []
     if 'current_victim_labels' not in st.session_state:

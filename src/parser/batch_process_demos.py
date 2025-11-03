@@ -78,7 +78,6 @@ def batch_process_demos(input_path: Path, output_dir: Path,
     Returns:
         Dictionary with processing results
     """
-    # Find all demo files
     demo_files = find_demo_files(input_path)
     
     if not demo_files:
@@ -87,22 +86,18 @@ def batch_process_demos(input_path: Path, output_dir: Path,
     
     logger.info(f"Found {len(demo_files)} demo files to process")
     
-    # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Process demos in parallel
     results = []
     successful_demos = []
     failed_demos = []
     
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all jobs
         future_to_demo = {
             executor.submit(process_demo_worker, (demo_file, output_dir, partition_rounds)): demo_file
             for demo_file in demo_files
         }
         
-        # Process results as they complete
         with tqdm(total=len(demo_files), desc="Processing demos") as pbar:
             for future in as_completed(future_to_demo):
                 result = future.result()
@@ -117,17 +112,13 @@ def batch_process_demos(input_path: Path, output_dir: Path,
                 
                 pbar.update(1)
     
-    # Update global dataset index
     index_file = output_dir / 'index.csv'
     for result in successful_demos:
         update_dataset_index(index_file, result['demo_name'], result['saved_data'])
     
-    # Create ML-ready dataset if requested
     ml_dataset_path = None
     if create_ml_dataset and successful_demos:
         ml_dataset_path = create_ml_ready_dataset(output_dir, successful_demos)
-    
-    # Generate summary report
     summary = {
         'total_demos': len(demo_files),
         'successful_demos': len(successful_demos),
@@ -154,7 +145,6 @@ def create_ml_ready_dataset(output_dir: Path, successful_demos: List[Dict]) -> P
     """
     logger.info("Creating ML-ready dataset...")
     
-    # Collect all data files
     all_kills = []
     all_ticks = []
     all_damages = []
@@ -166,49 +156,42 @@ def create_ml_ready_dataset(output_dir: Path, successful_demos: List[Dict]) -> P
         demo_name = demo_result['demo_name']
         demo_dir = output_dir / demo_name
         
-        # Load kills
         kills_file = demo_dir / 'kills.parquet'
         if kills_file.exists():
             kills_df = pd.read_parquet(kills_file)
             kills_df['demo_name'] = demo_name
             all_kills.append(kills_df)
         
-        # Load ticks
         ticks_file = demo_dir / 'ticks.parquet'
         if ticks_file.exists():
             ticks_df = pd.read_parquet(ticks_file)
             ticks_df['demo_name'] = demo_name
             all_ticks.append(ticks_df)
         
-        # Load damages
         damages_file = demo_dir / 'damages.parquet'
         if damages_file.exists():
             damages_df = pd.read_parquet(damages_file)
             damages_df['demo_name'] = demo_name
             all_damages.append(damages_df)
         
-        # Load shots
         shots_file = demo_dir / 'shots.parquet'
         if shots_file.exists():
             shots_df = pd.read_parquet(shots_file)
             shots_df['demo_name'] = demo_name
             all_shots.append(shots_df)
         
-        # Load grenades
         grenades_file = demo_dir / 'grenades.parquet'
         if grenades_file.exists():
             grenades_df = pd.read_parquet(grenades_file)
             grenades_df['demo_name'] = demo_name
             all_grenades.append(grenades_df)
         
-        # Load rounds
         rounds_file = demo_dir / 'rounds.parquet'
         if rounds_file.exists():
             rounds_df = pd.read_parquet(rounds_file)
             rounds_df['demo_name'] = demo_name
             all_rounds.append(rounds_df)
     
-    # Combine all data
     ml_dataset_dir = output_dir / 'ml_dataset'
     ml_dataset_dir.mkdir(exist_ok=True)
     
@@ -242,7 +225,6 @@ def create_ml_ready_dataset(output_dir: Path, successful_demos: List[Dict]) -> P
         combined_rounds.to_parquet(ml_dataset_dir / 'all_rounds.parquet', index=False)
         logger.info(f"Saved {len(combined_rounds)} rounds to ML dataset")
     
-    # Create dataset metadata
     metadata = {
         'total_demos': len(successful_demos),
         'demo_names': [d['demo_name'] for d in successful_demos],
@@ -318,7 +300,6 @@ Examples:
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    # Process demos
     logger.info(f"Starting batch processing of demos in: {args.input}")
     
     summary = batch_process_demos(
@@ -329,7 +310,6 @@ Examples:
         create_ml_dataset=not args.no_ml_dataset
     )
     
-    # Print summary
     logger.info("Batch processing complete!")
     logger.info(f"Total demos: {summary['total_demos']}")
     logger.info(f"Successful: {summary['successful_demos']}")

@@ -28,21 +28,15 @@ def world_to_map_coords(x: float, y: float, map_data: Dict, x_adjust: float = 50
     pos_y = map_data.get('pos_y', 0)
     scale = map_data.get('scale', 1.0)
     
-    # Apply transformation
-    # Center the coordinates and scale them
     image_x = (x - pos_x) / scale
-    image_y = (pos_y - y) / scale  # Note: Y is inverted for image coordinates
+    image_y = (pos_y - y) / scale
     
-    # Add offset to center the map in the 1024x1024 image
-    # Fine-tuned offsets for better positioning
-    image_x += 512  # Center horizontally
-    image_y += 512  # Center vertically
+    image_x += 512
+    image_y += 512
     
-    # Apply fine-tuning adjustments
     image_x += x_adjust
     image_y += y_adjust
     
-    # Clamp to reasonable bounds for a 1024x1024 image
     image_x = max(0, min(image_x, 1023))
     image_y = max(0, min(image_y, 1023))
     
@@ -66,28 +60,19 @@ def world_to_map_coords_advanced(x: float, y: float, map_data: Dict, x_adjust: f
     pos_y = map_data.get('pos_y', 0)
     scale = map_data.get('scale', 1.0)
     
-    # Base transformation
     image_x = (x - pos_x) / scale
     image_y = (pos_y - y) / scale
     
-    # Add centering offset
     image_x += 512
     image_y += 512
     
-    # Apply area-specific adjustments based on coordinate ranges
-    # This helps with maps that have different coordinate systems in different areas
-    
-    # For de_mirage specifically, apply different adjustments based on area
     if abs(x) > 2000 or abs(y) > 2000:
-        # Far areas might need different scaling
-        image_x *= 0.95  # Slight scale adjustment for far areas
+        image_x *= 0.95
         image_y *= 0.95
     
-    # Apply fine-tuning adjustments
     image_x += x_adjust
     image_y += y_adjust
     
-    # Clamp to image bounds
     image_x = max(0, min(image_x, 1023))
     image_y = max(0, min(image_y, 1023))
     
@@ -115,29 +100,23 @@ def world_to_map_coords_fixed(x: float, y: float, map_data: Dict, x_adjust: floa
     pos_y = map_data.get('pos_y', 0)
     scale = map_data.get('scale', 1.0)
     
-    # Map dimensions for de_mirage (actual playable area)
     MAP_OFFSET_X = 0
     MAP_OFFSET_Y = 97
     MAP_WIDTH = 990
     MAP_HEIGHT = 832
     
-    # Base transformation to map coordinate space
     map_x = (x - pos_x) / scale
-    map_y = (pos_y - y) / scale  # Y is inverted
+    map_y = (pos_y - y) / scale
     
-    # Center within the actual map area (not the full image)
-    map_x += MAP_WIDTH / 2   # Center in 990px width
-    map_y += MAP_HEIGHT / 2  # Center in 832px height
+    map_x += MAP_WIDTH / 2
+    map_y += MAP_HEIGHT / 2
     
-    # Apply fine-tuning adjustments
     map_x += x_adjust
     map_y += y_adjust
     
-    # Convert from map space to full image space
     image_x = MAP_OFFSET_X + map_x
     image_y = MAP_OFFSET_Y + map_y
     
-    # Clamp to the actual map area bounds
     image_x = max(MAP_OFFSET_X, min(image_x, MAP_OFFSET_X + MAP_WIDTH - 1))
     image_y = max(MAP_OFFSET_Y, min(image_y, MAP_OFFSET_Y + MAP_HEIGHT - 1))
     
@@ -232,7 +211,6 @@ def suggest_transformation_params(ticks_df: pd.DataFrame) -> Dict:
     if ticks_df.empty:
         return {'pos_x': -2000, 'pos_y': 2000, 'scale': 8.0}
     
-    # Get coordinate ranges - use the actual column names from AWPy
     if 'X' not in ticks_df.columns or 'Y' not in ticks_df.columns:
         return {'pos_x': -2000, 'pos_y': 2000, 'scale': 8.0}
     
@@ -242,27 +220,17 @@ def suggest_transformation_params(ticks_df: pd.DataFrame) -> Dict:
     if len(x_coords) == 0 or len(y_coords) == 0:
         return {'pos_x': -2000, 'pos_y': 2000, 'scale': 8.0}
     
-    # Calculate ranges
     x_min, x_max = x_coords.min(), x_coords.max()
     y_min, y_max = y_coords.min(), y_coords.max()
     
-    # Calculate center and range
     x_center = (x_min + x_max) / 2
     y_center = (y_min + y_max) / 2
     x_range = x_max - x_min
     y_range = y_max - y_min
     
-    # For CS2 maps, we want to map the world coordinates to a 1024x1024 image
-    # The transformation should center the map and scale it appropriately
-    # CS2 world coordinates are typically centered around (0,0) with ranges in the thousands
-    
-    # Calculate scale to fit the larger dimension into ~900 pixels (leaving some margin)
-    # Since we add 512 offset to center, we want the range to fit within ~900 pixels
     max_range = max(x_range, y_range)
     suggested_scale = max_range / 900
     
-    # The pos_x and pos_y should be the center of the coordinate system
-    # This will be subtracted from world coordinates to center them around 0
     suggested_pos_x = x_center
     suggested_pos_y = y_center
     
@@ -294,7 +262,6 @@ def find_nearest_tick(kill_tick: int, ticks_df: pd.DataFrame, player_name: str) 
     if ticks_df.empty:
         return None
     
-    # Try different possible column names for player identification
     player_col = None
     for col_name in ['player_name', 'name', 'player', 'attacker_name', 'victim_name']:
         if col_name in ticks_df.columns:
@@ -302,16 +269,13 @@ def find_nearest_tick(kill_tick: int, ticks_df: pd.DataFrame, player_name: str) 
             break
     
     if player_col is None:
-        # If no player column found, return None
         return None
     
-    # Filter ticks for this player
     player_ticks = ticks_df[ticks_df[player_col] == player_name].copy()
     
     if player_ticks.empty:
         return None
     
-    # Find nearest tick
     player_ticks['tick_diff'] = abs(player_ticks['tick'] - kill_tick)
     nearest_idx = player_ticks['tick_diff'].idxmin()
     

@@ -60,10 +60,7 @@ def safe_save_parquet(df: Optional[pd.DataFrame], filepath: Path, table_name: st
         return False
     
     try:
-        # Ensure directory exists
         filepath.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Save to parquet
         df.to_parquet(filepath, index=False)
         logger.info(f"Saved {len(df)} rows to {filepath}")
         return True
@@ -84,10 +81,7 @@ def safe_save_json(data: Dict, filepath: Path) -> bool:
         True if saved successfully, False otherwise
     """
     try:
-        # Ensure directory exists
         filepath.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Save to JSON
         with open(filepath, 'w') as f:
             json.dump(data, f, indent=2, default=str)
         logger.info(f"Saved JSON to {filepath}")
@@ -109,7 +103,6 @@ def get_awpy_attributes(demo_obj: Any) -> Dict[str, Any]:
     """
     available_attrs = {}
     
-    # Common AWPy attributes to check
     attr_names = [
         'ticks', 'kills', 'damages', 'shots', 'grenades', 
         'smokes', 'infernos', 'bomb', 'rounds', 'header'
@@ -176,26 +169,21 @@ def update_dataset_index(index_file: Path, demo_name: str, saved_data: Dict[str,
         saved_data: Dictionary of saved table names and row counts
     """
     try:
-        # Create index entry
         index_entry = {
             'demo_name': demo_name,
             'timestamp': pd.Timestamp.now().isoformat(),
             **{f'{table}_rows': count for table, count in saved_data.items()}
         }
         
-        # Load existing index or create new one
         if index_file.exists():
             index_df = pd.read_csv(index_file)
-            # Remove existing entry for this demo if it exists
             index_df = index_df[index_df['demo_name'] != demo_name]
         else:
             index_df = pd.DataFrame()
         
-        # Add new entry
         new_df = pd.DataFrame([index_entry])
         index_df = pd.concat([index_df, new_df], ignore_index=True)
         
-        # Save updated index
         index_file.parent.mkdir(parents=True, exist_ok=True)
         index_df.to_csv(index_file, index=False)
         logger.info(f"Updated dataset index: {index_file}")

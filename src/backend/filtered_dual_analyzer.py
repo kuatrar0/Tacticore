@@ -37,22 +37,18 @@ class FilteredDualKillAnalyzer:
     def load_models(self):
         """Load trained filtered models and encoders."""
         try:
-            # Load filtered attacker models
             with open(self.models_dir / "filtered_attacker_models.pkl", 'rb') as f:
                 self.attacker_models = pickle.load(f)
             
-            # Load filtered victim models
             with open(self.models_dir / "filtered_victim_models.pkl", 'rb') as f:
                 self.victim_models = pickle.load(f)
             
-            # Load filtered binarizers
             with open(self.models_dir / "filtered_attacker_binarizer.pkl", 'rb') as f:
                 self.attacker_mlb = pickle.load(f)
             
             with open(self.models_dir / "filtered_victim_binarizer.pkl", 'rb') as f:
                 self.victim_mlb = pickle.load(f)
             
-            # Load feature names
             with open(self.models_dir / "filtered_available_features.pkl", 'rb') as f:
                 self.feature_names = pickle.load(f)
             
@@ -79,12 +75,10 @@ class FilteredDualKillAnalyzer:
         if self.feature_names is None:
             return None
         
-        # Create feature vector
         features = []
         for feature_name in self.feature_names:
             if feature_name in kill_data:
                 value = kill_data[feature_name]
-                # Convert to float, handle missing values
                 try:
                     features.append(float(value) if value is not None else 0.0)
                 except (ValueError, TypeError):

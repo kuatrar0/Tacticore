@@ -24,7 +24,6 @@ import uvicorn
 sys.path.append(str(Path(__file__).parent.parent))
 
 from streamlit_app.transforms import get_enhanced_kill_context
-from streamlit_app.components import extract_kill_features
 from parser.parse_dem_to_parquet import parse_single_demo
 from .filtered_dual_analyzer import filtered_dual_analyzer
 
@@ -33,125 +32,6 @@ app = FastAPI(
     description="FastAPI backend for analyzing CS2 demo files and providing kill predictions",
     version="1.0.0"
 )
-
-def train_model_from_data(labeled_data: List[Dict]) -> tuple:
-    """
-    Train a model from labeled data.
-    
-    Args:
-        labeled_data: List of labeled kills
-        
-    Returns:
-        Tuple of (model, label_encoder, available_features, accuracy)
-    """
-    if len(labeled_data) < 10:
-        raise ValueError("Need at least 10 labeled kills to train a model")
-    
-    try:
-        # Import ML libraries
-        try:
-            import lightgbm as lgb
-            use_lightgbm = True
-        except ImportError:
-            from sklearn.ensemble import RandomForestClassifier
-            use_lightgbm = False
-        
-        from sklearn.model_selection import train_test_split
-        from sklearn.preprocessing import LabelEncoder
-        import numpy as np
-        
-        # Prepare training data
-        training_features = []
-        training_labels = []
-        
-        # Check what features are available in the data
-        sample_kill = labeled_data[0] if labeled_data else {}
-        available_features = []
-        
-        # Basic features that should be available
-        basic_features = ['distance_xy', 'time_in_round_s', 'headshot']
-        for feature in basic_features:
-            if feature in sample_kill and sample_kill[feature] is not None:
-                available_features.append(feature)
-        
-        # Enhanced features (optional)
-        enhanced_features = ['victim_was_aware', 'had_sound_cue', 'utility_count', 'approach_align_deg']
-        for feature in enhanced_features:
-            if feature in sample_kill and sample_kill[feature] is not None:
-                available_features.append(feature)
-        
-        for kill in labeled_data:
-            features = []
-            
-            # Always include basic features with fallbacks
-            features.append(float(kill.get('distance_xy', 0)))
-            features.append(float(kill.get('time_in_round_s', 0)))
-            features.append(1 if kill.get('headshot', False) else 0)
-            
-            # Add enhanced features if available, otherwise use defaults
-            if 'victim_was_aware' in available_features:
-                features.append(1 if kill.get('victim_was_aware', False) else 0)
-            else:
-                features.append(0)  # Default: not aware
-            
-            if 'had_sound_cue' in available_features:
-                features.append(1 if kill.get('had_sound_cue', False) else 0)
-            else:
-                features.append(0)  # Default: no sound cue
-            
-            if 'utility_count' in available_features:
-                features.append(float(kill.get('utility_count', 0)))
-            else:
-                features.append(0)  # Default: no utility
-            
-            if 'approach_align_deg' in available_features:
-                features.append(float(kill.get('approach_align_deg', 0) or 0))
-            else:
-                features.append(0)  # Default: no movement
-            
-            # Use attacker labels as target
-            if 'attacker_labels' in kill and kill['attacker_labels']:
-                label = kill['attacker_labels'][0]
-            else:
-                label = 'other'
-            
-            training_features.append(features)
-            training_labels.append(label)
-        
-        # Encode labels
-        label_encoder = LabelEncoder()
-        encoded_labels = label_encoder.fit_transform(training_labels)
-        
-        # Split data
-        X_train, X_val, y_train, y_val = train_test_split(
-            training_features, encoded_labels, test_size=0.2, random_state=42
-        )
-        
-        # Train model
-        if use_lightgbm:
-            model = lgb.LGBMClassifier(
-                n_estimators=100,
-                learning_rate=0.1,
-                max_depth=6,
-                random_state=42,
-                verbose=-1
-            )
-        else:
-            model = RandomForestClassifier(
-                n_estimators=100,
-                max_depth=6,
-                random_state=42
-            )
-        
-        model.fit(X_train, y_train)
-        
-        # Calculate accuracy
-        val_accuracy = model.score(X_val, y_val)
-        
-        return model, label_encoder, available_features, val_accuracy
-        
-    except Exception as e:
-        raise Exception(f"Training failed: {str(e)}")
 
 class KillAnalyzer:
     """Manages model loading, saving, and prediction."""
@@ -190,11 +70,7 @@ class KillAnalyzer:
             return {"error": "No trained model available"}
         
         try:
-            # The model was trained with 7 features in this specific order:
-            # ['distance_xy', 'time_in_round_s', 'headshot', 'victim_was_aware', 'had_sound_cue', 'utility_count', 'approach_align_deg']
             features = []
-            
-            # Always provide 7 features in the exact order the model was trained on
             features.append(float(kill_dict.get('distance_xy', 0)))
             features.append(float(kill_dict.get('time_in_round_s', 0)))
             features.append(1 if kill_dict.get('headshot', False) else 0)
@@ -202,9 +78,6 @@ class KillAnalyzer:
             features.append(1 if kill_dict.get('had_sound_cue', False) else 0)
             features.append(float(kill_dict.get('utility_count', 0)))
             features.append(float(kill_dict.get('approach_align_deg', 0) or 0))
-            
-            print(f"DEBUG: Extracted {len(features)} features: {features}")
-            print(f"DEBUG: Model expects 7 features: distance_xy, time_in_round_s, headshot, victim_was_aware, had_sound_cue, utility_count, approach_align_deg")
             
             # Make prediction
             prediction_proba = self.model.predict_proba([features])[0]
@@ -385,10 +258,7 @@ def process_demo_file(demo_path: str) -> Dict:
             # Get tickrate (default to 64)
             data['tickrate'] = 64
             
-            # Include the map name from saved_data
             data['map'] = saved_data.get('map', 'unknown')
-            print(f"DEBUG: Including map name in data: {data['map']}")
-            
             return data
             
     except Exception as e:
@@ -445,11 +315,7 @@ async def analyze_demo(demo_file: UploadFile = File(...)):
             shutil.copyfileobj(demo_file.file, tmp_file)
             tmp_path = tmp_file.name
         
-        # Process demo file
-        print(f"DEBUG: Processing demo file: {tmp_path}")
         result = process_demo_file(tmp_path)
-        print(f"DEBUG: Process result keys: {list(result.keys())}")
-        print(f"DEBUG: Process result map: {result.get('map', 'NOT_FOUND')}")
         
         # Extract data
         kills_df = result.get('kills_df')
@@ -470,20 +336,7 @@ async def analyze_demo(demo_file: UploadFile = File(...)):
                 content={"error": "Could not extract kills or ticks data from demo"}
             )
         
-        # Pre-process rounds data once to avoid repeated processing
         print(f"Processing {len(kills_df)} kills from demo...")
-        
-        # Debug: Check model info
-        if analyzer.available_features:
-            print(f"Model expects {len(analyzer.available_features)} features: {list(analyzer.available_features)}")
-        else:
-            print("⚠️ No available features found in model")
-        
-        # Debug: Check first kill data
-        if len(kills_df) > 0:
-            first_kill = kills_df.iloc[0].to_dict()
-            print(f"Sample kill columns: {list(first_kill.keys())}")
-            print(f"Sample kill data: round={first_kill.get('round')}, distance_xy={first_kill.get('distance_xy')}, time_in_round_s={first_kill.get('time_in_round_s')}")
         
         # Analyze each kill
         predictions = []
@@ -491,23 +344,15 @@ async def analyze_demo(demo_file: UploadFile = File(...)):
             try:
                 kill_dict = kill.to_dict()
                 
-                # Get enhanced context with all required arguments
                 kill_context = get_enhanced_kill_context(
                     kill, ticks_df, rounds_df, grenades_df, damages_df, shots_df,
                     smokes_df, infernos_df, bomb_df, map_data, tickrate
                 )
-                
-                # Convert numpy types in context to Python native types
                 kill_context = convert_numpy_types(kill_context)
                 
-                # Create enhanced kill dict with context data for prediction
                 enhanced_kill_dict = kill_dict.copy()
                 enhanced_kill_dict.update(kill_context)
-                
-                # Make filtered dual prediction using enhanced data
                 dual_analysis = filtered_dual_analyzer.analyze_kill(enhanced_kill_dict, threshold=0.5)
-                
-                # Create result with all values converted to native Python types
                 kill_result = {
                     "kill_id": str(f"{kill.get('tick', '')}_{kill.get('attacker_name', '')}_{kill.get('victim_name', '')}"),
                     "attacker": str(kill.get('attacker_name', 'Unknown')),
@@ -525,24 +370,16 @@ async def analyze_demo(demo_file: UploadFile = File(...)):
                 }
                 predictions.append(kill_result)
                 
-                # Progress indicator
                 if (idx + 1) % 10 == 0:
                     print(f"Processed {idx + 1}/{len(kills_df)} kills...")
                     
             except Exception as e:
                 print(f"Error processing kill {idx}: {e}")
-                # Continue with next kill instead of failing completely
                 continue
         
-        # Clean up
         os.unlink(tmp_path)
         
-        # Get the actual map name from the demo parsing result
         actual_map_name = result.get('map', 'Unknown')
-        print(f"DEBUG: Map name from demo parsing: '{actual_map_name}'")
-        print(f"DEBUG: Result keys: {list(result.keys())}")
-        
-        # Convert final response to ensure all values are JSON serializable
         response_data = {
             "status": "success",
             "total_kills": len(predictions),
@@ -551,7 +388,6 @@ async def analyze_demo(demo_file: UploadFile = File(...)):
             "predictions": predictions
         }
         
-        # Final conversion to ensure JSON serialization
         response_data = convert_numpy_types(response_data)
         
         return response_data

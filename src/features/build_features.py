@@ -13,8 +13,6 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import LabelEncoder, OneHotEncoder
-from sklearn.compose import ColumnTransformer
 
 # Add src to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
@@ -53,7 +51,6 @@ def load_data(kills_path: Path, ticks_path: Path,
     """
     data = {}
     
-    # Load kills data
     logger.info(f"Loading kills data from {kills_path}")
     try:
         data['kills'] = pd.read_parquet(kills_path)
@@ -62,7 +59,6 @@ def load_data(kills_path: Path, ticks_path: Path,
         logger.error(f"Failed to load kills data: {e}")
         raise
     
-    # Load ticks data
     logger.info(f"Loading ticks data from {ticks_path}")
     try:
         data['ticks'] = pd.read_parquet(ticks_path)
@@ -71,7 +67,6 @@ def load_data(kills_path: Path, ticks_path: Path,
         logger.error(f"Failed to load ticks data: {e}")
         raise
     
-    # Load grenades data (optional)
     if grenades_path and grenades_path.exists():
         logger.info(f"Loading grenades data from {grenades_path}")
         try:
@@ -83,7 +78,6 @@ def load_data(kills_path: Path, ticks_path: Path,
     else:
         data['grenades'] = pd.DataFrame()
     
-    # Load labels data (optional)
     if labels_path and labels_path.exists():
         logger.info(f"Loading labels data from {labels_path}")
         try:
@@ -107,7 +101,6 @@ def validate_data(data: Dict[str, pd.DataFrame]) -> None:
     """
     logger.info("Validating data schemas...")
     
-    # Validate kills data
     kills_validation = validate_dataframe_schema(data['kills'], KillSchema)
     if not kills_validation['valid']:
         logger.error("Kills data validation failed")
@@ -115,7 +108,6 @@ def validate_data(data: Dict[str, pd.DataFrame]) -> None:
             logger.error(warning)
         raise ValueError("Invalid kills data")
     
-    # Validate ticks data
     ticks_validation = validate_dataframe_schema(data['ticks'], TickSchema)
     if not ticks_validation['valid']:
         logger.error("Ticks data validation failed")
@@ -123,7 +115,6 @@ def validate_data(data: Dict[str, pd.DataFrame]) -> None:
             logger.error(warning)
         raise ValueError("Invalid ticks data")
     
-    # Validate grenades data (if present)
     if not data['grenades'].empty:
         grenades_validation = validate_dataframe_schema(data['grenades'], GrenadeSchema)
         for warning in get_schema_warnings(grenades_validation):
@@ -155,11 +146,9 @@ def build_kill_context(kills_df: pd.DataFrame, ticks_df: pd.DataFrame,
         attacker_name = kill_row['attacker_name']
         victim_name = kill_row['victim_name']
         
-        # Find nearest tick data for attacker and victim
         attacker_tick = find_nearest_tick(kill_tick, ticks_df, attacker_name)
         victim_tick = find_nearest_tick(kill_tick, ticks_df, victim_name)
         
-        # Initialize context
         context = {
             'kill_tick': kill_tick,
             'attacker_name': attacker_name,
@@ -169,7 +158,6 @@ def build_kill_context(kills_df: pd.DataFrame, ticks_df: pd.DataFrame,
             'headshot': kill_row.get('headshot', False)
         }
         
-        # Add attacker context
         if attacker_tick is not None:
             context.update({
                 'attacker_x': attacker_tick.get('x', 0),
@@ -185,7 +173,6 @@ def build_kill_context(kills_df: pd.DataFrame, ticks_df: pd.DataFrame,
                 'attacker_health': 100, 'attacker_vel_x': 0, 'attacker_vel_y': 0
             })
         
-        # Add victim context
         if victim_tick is not None:
             context.update({
                 'victim_x': victim_tick.get('x', 0),
@@ -198,7 +185,6 @@ def build_kill_context(kills_df: pd.DataFrame, ticks_df: pd.DataFrame,
                 'victim_x': 0, 'victim_y': 0, 'victim_z': 0, 'victim_health': 100
             })
         
-        # Calculate derived features
         context['time_in_round_s'] = calculate_time_in_round(kill_tick, pd.DataFrame(), tickrate)
         
         context['distance_xy'] = calculate_distance_2d(
@@ -212,7 +198,6 @@ def build_kill_context(kills_df: pd.DataFrame, ticks_df: pd.DataFrame,
             context['attacker_vel_x'], context['attacker_vel_y']
         )
         
-        # Find nearby utility
         utility_flags = find_nearby_utility(
             kill_tick, context['victim_x'], context['victim_y'], grenades_df
         )
@@ -245,10 +230,8 @@ def merge_labels(context_df: pd.DataFrame, labels_df: pd.DataFrame) -> pd.DataFr
     
     logger.info("Merging context with labels...")
     
-    # Merge on key fields
     merge_keys = ['kill_tick', 'attacker_name', 'victim_name']
     
-    # Check if merge keys exist in both DataFrames
     context_keys = [key for key in merge_keys if key in context_df.columns]
     label_keys = [key for key in merge_keys if key in labels_df.columns]
     
@@ -259,7 +242,6 @@ def merge_labels(context_df: pd.DataFrame, labels_df: pd.DataFrame) -> pd.DataFr
         merged_df['victim_label'] = ''
         return merged_df
     
-    # Use the common keys for merging
     common_keys = list(set(context_keys) & set(label_keys))
     
     if not common_keys:
@@ -269,14 +251,12 @@ def merge_labels(context_df: pd.DataFrame, labels_df: pd.DataFrame) -> pd.DataFr
         merged_df['victim_label'] = ''
         return merged_df
     
-    # Merge DataFrames
     merged_df = context_df.merge(
         labels_df[common_keys + ['attacker_label', 'victim_label']],
         on=common_keys,
         how='left'
     )
     
-    # Fill missing labels
     merged_df['attacker_label'] = merged_df['attacker_label'].fillna('')
     merged_df['victim_label'] = merged_df['victim_label'].fillna('')
     
@@ -299,37 +279,31 @@ def engineer_features(features_df: pd.DataFrame) -> pd.DataFrame:
     
     df = features_df.copy()
     
-    # Create binary features
     df['is_headshot'] = df['headshot'].astype(int)
     df['is_attacker_healthy'] = (df['attacker_health'] > 50).astype(int)
     df['is_victim_healthy'] = (df['victim_health'] > 50).astype(int)
     
-    # Create distance categories
     df['distance_category'] = pd.cut(
         df['distance_xy'],
         bins=[0, 500, 1000, 2000, float('inf')],
         labels=['very_close', 'close', 'medium', 'far']
     )
     
-    # Create time categories
     df['time_category'] = pd.cut(
         df['time_in_round_s'],
         bins=[0, 30, 60, 90, float('inf')],
         labels=['early', 'mid_early', 'mid_late', 'late']
     )
     
-    # Create alignment categories
     df['alignment_category'] = pd.cut(
         df['approach_align_deg'],
         bins=[0, 30, 60, 90, 180],
         labels=['excellent', 'good', 'fair', 'poor']
     )
     
-    # Create utility count
     utility_cols = ['flash_near', 'smoke_near', 'molotov_near', 'he_near']
     df['utility_count'] = df[utility_cols].sum(axis=1)
     
-    # Create side binary features
     if 'side' in df.columns:
         df['is_terrorist'] = (df['side'] == 'T').astype(int)
         df['is_counter_terrorist'] = (df['side'] == 'CT').astype(int)
@@ -353,27 +327,22 @@ def prepare_ml_features(features_df: pd.DataFrame) -> pd.DataFrame:
     
     df = features_df.copy()
     
-    # Handle categorical variables
     categorical_cols = ['side', 'place', 'distance_category', 'time_category', 'alignment_category']
     
     for col in categorical_cols:
         if col in df.columns:
-            # Create dummy variables
             dummies = pd.get_dummies(df[col], prefix=col, dummy_na=True)
             df = pd.concat([df, dummies], axis=1)
             df.drop(col, axis=1, inplace=True)
     
-    # Convert boolean columns to int
     bool_cols = ['headshot', 'flash_near', 'smoke_near', 'molotov_near', 'he_near']
     for col in bool_cols:
         if col in df.columns:
             df[col] = df[col].astype(int)
     
-    # Fill missing values
     numeric_cols = df.select_dtypes(include=[np.number]).columns
     df[numeric_cols] = df[numeric_cols].fillna(0)
     
-    # Remove non-feature columns
     non_feature_cols = ['kill_tick', 'attacker_name', 'victim_name', 'attacker_label', 'victim_label']
     feature_cols = [col for col in df.columns if col not in non_feature_cols]
     
@@ -445,40 +414,27 @@ Examples:
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    # Load data
     data = load_data(args.kills, args.ticks, args.grenades, args.labels)
-    
-    # Validate data
     validate_data(data)
     
-    # Build kill context
     context_df = build_kill_context(
         data['kills'], data['ticks'], data['grenades'], args.tickrate
     )
     
-    # Merge with labels
     features_df = merge_labels(context_df, data['labels'])
-    
-    # Engineer additional features
     features_df = engineer_features(features_df)
-    
-    # Prepare for ML
     ml_features_df = prepare_ml_features(features_df)
     
-    # Save results
     output_dir = args.output.parent
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Save full features (with labels)
     features_df.to_csv(args.output, index=False)
     logger.info(f"Saved features to {args.output}")
     
-    # Save ML-ready features (without labels)
     ml_output = args.output.parent / f"ml_{args.output.name}"
     ml_features_df.to_csv(ml_output, index=False)
     logger.info(f"Saved ML features to {ml_output}")
     
-    # Print summary
     logger.info("Feature engineering completed!")
     logger.info(f"Total kills processed: {len(features_df)}")
     logger.info(f"Features with attacker labels: {len(features_df[features_df['attacker_label'] != ''])}")

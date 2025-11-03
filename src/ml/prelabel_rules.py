@@ -44,19 +44,16 @@ def apply_attacker_rules(kill_row: pd.Series, ticks_df: pd.DataFrame) -> str:
     attacker_name = kill_row['attacker_name']
     victim_name = kill_row['victim_name']
     
-    # Find nearest tick data
     attacker_tick = find_nearest_tick(kill_tick, ticks_df, attacker_name)
     victim_tick = find_nearest_tick(kill_tick, ticks_df, victim_name)
     
     if attacker_tick is None or victim_tick is None:
         return ''
     
-    # Extract features
     attacker_health = attacker_tick.get('health', 100)
     victim_health = victim_tick.get('health', 100)
     headshot = kill_row.get('headshot', False)
     
-    # Calculate distance and alignment
     distance = calculate_distance_2d(
         attacker_tick.get('x', 0), attacker_tick.get('y', 0),
         victim_tick.get('x', 0), victim_tick.get('y', 0)
@@ -68,27 +65,21 @@ def apply_attacker_rules(kill_row: pd.Series, ticks_df: pd.DataFrame) -> str:
         attacker_tick.get('vel_x', 0), attacker_tick.get('vel_y', 0)
     )
     
-    # Rule 1: Precise headshot at short distance
     if headshot and distance < 1000 and alignment < 30:
         return 'precise'
     
-    # Rule 2: Good positioning - attacker healthy, victim low health
     if attacker_health > 80 and victim_health < 50:
         return 'good_positioning'
     
-    # Rule 3: Bad positioning - attacker low health, victim healthy
     if attacker_health < 30 and victim_health > 80:
         return 'bad_positioning'
     
-    # Rule 4: Good decision - attacker at advantage
     if attacker_health > victim_health and distance < 1500:
         return 'good_decision'
     
-    # Rule 5: Bad decision - attacker at disadvantage
     if attacker_health < victim_health and distance > 2000:
         return 'bad_decision'
     
-    # Rule 6: Imprecise - poor alignment or long distance
     if alignment > 90 or distance > 2500:
         return 'imprecise'
     
@@ -110,41 +101,33 @@ def apply_victim_rules(kill_row: pd.Series, ticks_df: pd.DataFrame) -> str:
     attacker_name = kill_row['attacker_name']
     victim_name = kill_row['victim_name']
     
-    # Find nearest tick data
     attacker_tick = find_nearest_tick(kill_tick, ticks_df, attacker_name)
     victim_tick = find_nearest_tick(kill_tick, ticks_df, victim_name)
     
     if attacker_tick is None or victim_tick is None:
         return ''
     
-    # Extract features
     attacker_health = attacker_tick.get('health', 100)
     victim_health = victim_tick.get('health', 100)
     headshot = kill_row.get('headshot', False)
     
-    # Calculate distance
     distance = calculate_distance_2d(
         attacker_tick.get('x', 0), attacker_tick.get('y', 0),
         victim_tick.get('x', 0), victim_tick.get('y', 0)
     )
     
-    # Rule 1: Exposed - victim healthy but killed by headshot at distance
     if victim_health > 80 and headshot and distance > 1500:
         return 'exposed'
     
-    # Rule 2: No cover - victim killed quickly at close range
     if distance < 500 and victim_health > 50:
         return 'no_cover'
     
-    # Rule 3: Good position - victim had advantage but still died
     if victim_health > attacker_health and distance > 1000:
         return 'good_position'
     
-    # Rule 4: Mistake - victim low health but attacker also low
     if victim_health < 30 and attacker_health < 50:
         return 'mistake'
     
-    # Rule 5: Exposed - victim at full health killed at long range
     if victim_health > 90 and distance > 2000:
         return 'exposed'
     
@@ -168,7 +151,6 @@ def apply_advanced_rules(kill_row: pd.Series, ticks_df: pd.DataFrame,
     attacker_name = kill_row['attacker_name']
     victim_name = kill_row['victim_name']
     
-    # Find nearest tick data
     attacker_tick = find_nearest_tick(kill_tick, ticks_df, attacker_name)
     victim_tick = find_nearest_tick(kill_tick, ticks_df, victim_name)
     
@@ -178,17 +160,14 @@ def apply_advanced_rules(kill_row: pd.Series, ticks_df: pd.DataFrame,
     attacker_label = ''
     victim_label = ''
     
-    # Check for nearby utility
     if not grenades_df.empty:
-        # Filter grenades around kill time (±2 seconds)
-        time_window = 128  # 2 seconds at 64 tickrate
+        time_window = 128
         nearby_grenades = grenades_df[
             (grenades_df['tick'] >= kill_tick - time_window) &
             (grenades_df['tick'] <= kill_tick + time_window)
         ]
         
         if not nearby_grenades.empty:
-            # Calculate distances to grenades
             victim_x = victim_tick.get('x', 0)
             victim_y = victim_tick.get('y', 0)
             
@@ -197,21 +176,18 @@ def apply_advanced_rules(kill_row: pd.Series, ticks_df: pd.DataFrame,
                 nearby_grenades['x'], nearby_grenades['y']
             )
             
-            # Check for flash kills
             flash_grenades = nearby_grenades[
                 (nearby_grenades['grenade_type'].str.contains('flash', case=False, na=False)) &
                 (nearby_grenades['distance'] < 300)
             ]
             
             if not flash_grenades.empty:
-                attacker_label = 'good_decision'  # Using utility effectively
-                victim_label = 'exposed'  # Victim was flashed
+                attacker_label = 'good_decision'
+                victim_label = 'exposed'
     
-    # Check for weapon-specific rules
     weapon = kill_row.get('weapon', '').lower()
     
     if 'awp' in weapon or 'scout' in weapon:
-        # Sniper rifle kills
         distance = calculate_distance_2d(
             attacker_tick.get('x', 0), attacker_tick.get('y', 0),
             victim_tick.get('x', 0), victim_tick.get('y', 0)
@@ -222,7 +198,6 @@ def apply_advanced_rules(kill_row: pd.Series, ticks_df: pd.DataFrame,
             victim_label = 'exposed'
     
     elif 'pistol' in weapon or 'deagle' in weapon:
-        # Pistol kills
         if kill_row.get('headshot', False):
             attacker_label = 'precise'
     
@@ -250,11 +225,9 @@ def generate_prelabels(kills_df: pd.DataFrame, ticks_df: pd.DataFrame,
     prelabels = []
     
     for idx, kill_row in kills_df.iterrows():
-        # Apply basic rules
         attacker_label = apply_attacker_rules(kill_row, ticks_df)
         victim_label = apply_victim_rules(kill_row, ticks_df)
         
-        # Apply advanced rules if basic rules didn't find anything
         if not attacker_label or not victim_label:
             adv_attacker, adv_victim = apply_advanced_rules(kill_row, ticks_df, grenades_df)
             if not attacker_label:
@@ -273,7 +246,6 @@ def generate_prelabels(kills_df: pd.DataFrame, ticks_df: pd.DataFrame,
     
     prelabels_df = pd.DataFrame(prelabels)
     
-    # Count pre-labels
     attacker_count = len(prelabels_df[prelabels_df['pre_att'] != ''])
     victim_count = len(prelabels_df[prelabels_df['pre_vic'] != ''])
     
@@ -333,7 +305,6 @@ Examples:
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    # Load data
     logger.info(f"Loading kills data from {args.kills}")
     kills_df = pd.read_parquet(args.kills)
     logger.info(f"Loaded {len(kills_df)} kills")
@@ -348,21 +319,17 @@ Examples:
         grenades_df = pd.read_parquet(args.grenades)
         logger.info(f"Loaded {len(grenades_df)} grenade events")
     
-    # Generate pre-labels
     prelabels_df = generate_prelabels(kills_df, ticks_df, grenades_df)
     
-    # Save results
     args.output.parent.mkdir(parents=True, exist_ok=True)
     prelabels_df.to_csv(args.output, index=False)
     logger.info(f"Saved pre-labels to {args.output}")
     
-    # Print summary
     logger.info("Pre-labeling completed!")
     logger.info(f"Total kills processed: {len(prelabels_df)}")
     logger.info(f"Kills with attacker pre-labels: {len(prelabels_df[prelabels_df['pre_att'] != ''])}")
     logger.info(f"Kills with victim pre-labels: {len(prelabels_df[prelabels_df['pre_vic'] != ''])}")
     
-    # Show label distribution
     if len(prelabels_df[prelabels_df['pre_att'] != '']) > 0:
         logger.info("Attacker pre-label distribution:")
         for label, count in prelabels_df['pre_att'].value_counts().items():
