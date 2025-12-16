@@ -27,6 +27,7 @@ COPY requirements-docker.txt .
 RUN pip install --no-cache-dir -r requirements-docker.txt
 
 # Copy the entire project
+COPY . .
 
 # Create necessary directories
 RUN mkdir -p src/backend/models || true
