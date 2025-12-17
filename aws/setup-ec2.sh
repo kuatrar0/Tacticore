@@ -1,58 +1,55 @@
 #!/bin/bash
 # ==============================================
-# Tacticore - EC2 Setup Script
-# Ejecutar en una instancia Amazon Linux 2023 o Ubuntu
+# Tacticore - EC2 Setup Script para Amazon Linux 2023
 # ==============================================
 
 set -e
 
 echo "🚀 Configurando instancia para Tacticore..."
 
-# Detectar sistema operativo
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    OS=$ID
-fi
+# Instalar Git y Docker
+echo "📦 Instalando Git y Docker..."
+sudo yum install -y git docker
 
-echo "📦 Instalando Docker..."
+# Iniciar Docker
+echo "🐳 Iniciando Docker..."
+sudo systemctl start docker
+sudo systemctl enable docker
+sudo usermod -aG docker ec2-user
 
-if [ "$OS" = "amzn" ] || [ "$OS" = "amazon" ]; then
-    # Amazon Linux
-    sudo yum update -y
-    sudo yum install -y docker git
-    sudo systemctl start docker
-    sudo systemctl enable docker
-    sudo usermod -aG docker ec2-user
-elif [ "$OS" = "ubuntu" ]; then
-    # Ubuntu
-    sudo apt-get update
-    sudo apt-get install -y docker.io git
-    sudo systemctl start docker
-    sudo systemctl enable docker
-    sudo usermod -aG docker ubuntu
-else
-    echo "⚠️  Sistema operativo no reconocido. Instalando Docker manualmente..."
-    curl -fsSL https://get.docker.com -o get-docker.sh
-    sudo sh get-docker.sh
-fi
+# Instalar Docker Compose V2 y Buildx
+echo "📦 Instalando Docker Compose V2 y Buildx..."
+DOCKER_CONFIG=${DOCKER_CONFIG:-$HOME/.docker}
+mkdir -p $DOCKER_CONFIG/cli-plugins
 
-echo "📦 Instalando Docker Compose..."
-sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-sudo chmod +x /usr/local/bin/docker-compose
+# Docker Compose V2
+curl -SL https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-linux-x86_64 \
+  -o $DOCKER_CONFIG/cli-plugins/docker-compose
+chmod +x $DOCKER_CONFIG/cli-plugins/docker-compose
 
-echo "✅ Docker instalado correctamente"
-docker --version
-docker-compose --version
+# Docker Buildx
+curl -SL https://github.com/docker/buildx/releases/download/v0.19.3/buildx-v0.19.3.linux-amd64 \
+  -o $DOCKER_CONFIG/cli-plugins/docker-buildx
+chmod +x $DOCKER_CONFIG/cli-plugins/docker-buildx
 
 echo ""
 echo "=========================================="
 echo "✅ Setup completado!"
 echo ""
+echo "Versiones instaladas:"
+docker --version
+$DOCKER_CONFIG/cli-plugins/docker-compose version
+$DOCKER_CONFIG/cli-plugins/docker-buildx version
+echo ""
+echo "=========================================="
+echo ""
 echo "⚠️  IMPORTANTE: Cerrá y volvé a abrir la sesión SSH"
 echo "   para que los permisos de Docker se apliquen."
 echo ""
+echo "   exit"
+echo "   ssh -i tu-clave.pem ec2-user@<IP>"
+echo ""
 echo "Luego ejecutá:"
 echo "   cd Tacticore"
-echo "   docker-compose up -d --build"
+echo "   docker compose up -d --build"
 echo "=========================================="
-

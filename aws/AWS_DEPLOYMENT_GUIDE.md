@@ -1,6 +1,6 @@
 # 🚀 Guía de Despliegue en AWS EC2 - Tacticore
 
-Guía rápida para desplegar Tacticore en una instancia EC2 para demo.
+Guía completa para desplegar Tacticore en una instancia EC2 para demo.
 
 ## Requisitos Previos
 
@@ -19,8 +19,8 @@ Guía rápida para desplegar Tacticore en una instancia EC2 para demo.
    | Campo | Valor |
    |-------|-------|
    | Name | `tacticore-demo` |
-   | AMI | Amazon Linux 2023 (o Ubuntu 22.04) |
-   | Instance type | `t3.large` (8 GB RAM) |
+   | AMI | Amazon Linux 2023 |
+   | Instance type | `t3.large` (8 GB RAM) - mínimo recomendado |
    | Key pair | Seleccionar o crear una |
    | Storage | 30 GB gp3 |
 
@@ -37,42 +37,91 @@ Guía rápida para desplegar Tacticore en una instancia EC2 para demo.
 
 ## Paso 2: Conectarse a la Instancia
 
-```bash
-# Obtener la IP pública de la instancia desde la consola de AWS
-ssh -i "tu-clave.pem" ec2-user@<IP-PUBLICA>
+### Configurar permisos del archivo .pem
 
-# Si usas Ubuntu:
-ssh -i "tu-clave.pem" ubuntu@<IP-PUBLICA>
+```bash
+# El archivo .pem debe tener permisos restrictivos
+chmod 400 tu-clave.pem
+```
+
+### Conectarse por SSH
+
+```bash
+ssh -i "tu-clave.pem" ec2-user@<IP-PUBLICA>
 ```
 
 ---
 
-## Paso 3: Clonar el Repositorio
+## Paso 3: Instalar Dependencias
+
+### Instalar Git
 
 ```bash
-git clone <URL-DE-TU-REPO> Tacticore
+sudo yum install -y git
+```
+
+### Clonar el Repositorio
+
+```bash
+git clone https://github.com/kuatrar0/Tacticore.git
 cd Tacticore
-```
-
-**Alternativa - Subir archivos manualmente:**
-```bash
-# Desde tu máquina local:
-scp -i "tu-clave.pem" -r /path/to/Tacticore ec2-user@<IP-PUBLICA>:~/
+git checkout feature/upload-aws
 ```
 
 ---
 
-## Paso 4: Ejecutar Setup
+## Paso 4: Instalar Docker y Docker Compose
+
+Amazon Linux 2023 requiere instalación manual de Docker Compose V2 y Buildx.
+
+### Instalar Docker
 
 ```bash
-chmod +x aws/setup-ec2.sh
-./aws/setup-ec2.sh
+# Instalar Docker desde repositorio de Amazon
+sudo yum install -y docker
+
+# Iniciar y habilitar Docker
+sudo systemctl start docker
+sudo systemctl enable docker
+
+# Agregar usuario al grupo docker
+sudo usermod -aG docker ec2-user
 ```
 
-**⚠️ Después del setup, cerrar y reconectar SSH:**
+### Instalar Docker Compose V2 y Buildx
+
 ```bash
+# Crear directorio para plugins de Docker
+DOCKER_CONFIG=${DOCKER_CONFIG:-$HOME/.docker}
+mkdir -p $DOCKER_CONFIG/cli-plugins
+
+# Descargar Docker Compose V2
+curl -SL https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-linux-x86_64 \
+  -o $DOCKER_CONFIG/cli-plugins/docker-compose
+chmod +x $DOCKER_CONFIG/cli-plugins/docker-compose
+
+# Descargar Docker Buildx
+curl -SL https://github.com/docker/buildx/releases/download/v0.19.3/buildx-v0.19.3.linux-amd64 \
+  -o $DOCKER_CONFIG/cli-plugins/docker-buildx
+chmod +x $DOCKER_CONFIG/cli-plugins/docker-buildx
+```
+
+### Reconectar SSH
+
+```bash
+# Cerrar sesión para aplicar permisos de grupo docker
 exit
+
+# Reconectar
 ssh -i "tu-clave.pem" ec2-user@<IP-PUBLICA>
+```
+
+### Verificar instalación
+
+```bash
+docker --version
+docker compose version
+docker buildx version
 ```
 
 ---
@@ -81,15 +130,18 @@ ssh -i "tu-clave.pem" ec2-user@<IP-PUBLICA>
 
 ```bash
 cd Tacticore
-docker-compose up -d --build
+docker compose up -d --build
 ```
 
-El build inicial toma **5-10 minutos** (descarga de dependencias y Go).
+> **Nota:** Con Docker Compose V2 se usa `docker compose` (sin guión).
 
-### Verificar que está corriendo:
+El build inicial toma **5-10 minutos** (descarga de dependencias y compilación de Go).
+
+### Verificar que está corriendo
+
 ```bash
-docker-compose ps
-docker-compose logs -f
+docker compose ps
+docker compose logs -f
 ```
 
 ---
@@ -102,48 +154,122 @@ docker-compose logs -f
 | **API (FastAPI)** | `http://<IP-PUBLICA>:8000` |
 | **API Docs** | `http://<IP-PUBLICA>:8000/docs` |
 
+### Probar la API
+
+```bash
+# Verificar que la API responde
+curl http://localhost:8000/
+
+# Ver información del modelo
+curl http://localhost:8000/model-info
+
+# Analizar un archivo demo
+curl -X POST "http://localhost:8000/analyze-demo" \
+  -F "demo_file=@archivo.dem"
+```
+
 ---
 
 ## Comandos Útiles
 
 ```bash
 # Ver logs en tiempo real
-docker-compose logs -f
+docker compose logs -f
 
 # Reiniciar servicios
-docker-compose restart
+docker compose restart
 
 # Detener todo
-docker-compose down
+docker compose down
 
 # Ver uso de recursos
 docker stats
+
+# Ver estado de contenedores
+docker compose ps
 ```
 
 ---
 
 ## Troubleshooting
 
+### Error: "Permissions for .pem are too open"
+
+```bash
+chmod 400 tu-clave.pem
+```
+
+### Error: "git: command not found"
+
+```bash
+sudo yum install -y git
+```
+
+### Error: "compose build requires buildx 0.17 or later"
+
+Docker de Amazon Linux no incluye Buildx. Instalarlo manualmente:
+
+```bash
+DOCKER_CONFIG=${DOCKER_CONFIG:-$HOME/.docker}
+mkdir -p $DOCKER_CONFIG/cli-plugins
+curl -SL https://github.com/docker/buildx/releases/download/v0.19.3/buildx-v0.19.3.linux-amd64 \
+  -o $DOCKER_CONFIG/cli-plugins/docker-buildx
+chmod +x $DOCKER_CONFIG/cli-plugins/docker-buildx
+```
+
+### Error: "permission denied" al usar docker
+
+Reconectar SSH después de agregar usuario al grupo docker:
+
+```bash
+exit
+ssh -i "tu-clave.pem" ec2-user@<IP-PUBLICA>
+```
+
 ### Error de memoria durante el build
+
 ```bash
 # Verificar memoria disponible
 free -h
 
-# Si no hay suficiente, crear swap
+# Si hay menos de 4 GB, crear swap
 sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
 sudo chmod 600 /swapfile
 sudo mkswap /swapfile
 sudo swapon /swapfile
 ```
 
-### Puerto no accesible
-- Verificar Security Group en AWS Console
-- Verificar que el servicio esté corriendo: `docker-compose ps`
+### Puerto no accesible desde internet
+
+1. Verificar Security Group en AWS Console
+2. Verificar que el servicio esté corriendo: `docker compose ps`
+3. Verificar logs: `docker compose logs`
 
 ### El contenedor se reinicia constantemente
+
 ```bash
 # Ver logs para identificar el error
-docker-compose logs --tail=100
+docker compose logs --tail=100
+
+# Ver estado detallado
+docker compose ps -a
+```
+
+### El análisis de demos es muy lento
+
+El tiempo de análisis depende de:
+- **Tamaño del archivo demo** (~350 MB = ~5 min)
+- **Velocidad de upload** desde tu máquina a AWS
+- **Tipo de instancia** (más CPU = más rápido)
+
+Para archivos grandes, considerar subir directamente al servidor:
+
+```bash
+# Desde tu máquina local
+scp -i "tu-clave.pem" archivo.dem ec2-user@<IP>:~/Tacticore/
+
+# Luego en el servidor
+curl -X POST "http://localhost:8000/analyze-demo" -F "demo_file=@archivo.dem"
 ```
 
 ---
@@ -152,7 +278,7 @@ docker-compose logs --tail=100
 
 ```bash
 # En la instancia
-docker-compose down
+docker compose down
 docker system prune -a
 
 # Desde AWS Console: Terminate la instancia EC2
@@ -169,3 +295,23 @@ docker system prune -a
 
 **💡 Tip:** Apagar la instancia cuando no se use para ahorrar costos.
 
+---
+
+## Resumen de Comandos Rápidos
+
+```bash
+# Setup completo (copiar y pegar)
+sudo yum install -y git docker
+sudo systemctl start docker && sudo systemctl enable docker
+sudo usermod -aG docker ec2-user
+
+DOCKER_CONFIG=$HOME/.docker
+mkdir -p $DOCKER_CONFIG/cli-plugins
+curl -SL https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-linux-x86_64 -o $DOCKER_CONFIG/cli-plugins/docker-compose
+curl -SL https://github.com/docker/buildx/releases/download/v0.19.3/buildx-v0.19.3.linux-amd64 -o $DOCKER_CONFIG/cli-plugins/docker-buildx
+chmod +x $DOCKER_CONFIG/cli-plugins/*
+
+# Reconectar SSH, luego:
+cd Tacticore
+docker compose up -d --build
+```
